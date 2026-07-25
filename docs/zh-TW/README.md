@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.26-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.27-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -59,6 +59,7 @@
 
 | 日期 | 更新內容 |
 |------|----------|
+| 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 與 Favicon：左上角圖示更換為自訂品牌 Logo 圖片（並壓縮至 128×128、約 16KB，較原圖縮小約 97%）；管理面板與登入頁新增瀏覽器分頁圖示（Favicon，使用同一 Logo） |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 新增 OpenAI Responses API 支援（`/v1/responses` 或 `/openai/v1/responses`）：讓需要新版 Responses 協議的客戶端（如 2026 年 2 月起砍掉 Chat Completions 支援的 Codex CLI）能正常接入 gemini2api——支援文字對話、串流輸出、工具呼叫，Gemini 模型和 API 管理設定的第三方模型均可使用；串流事件嚴格遵循官方協議順序（修正了參考實現已知會漏發的兩個關鍵事件：`response.output_text.done` / `response.function_call_arguments.done`）；不支援伺服器端多輪狀態（`previous_response_id` 會明確報錯而非假裝續上），因為 Codex CLI 本身會重發完整對話歷史 |
 | 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 管理頁 Gemini 兜底一鍵開關：即時開/關「Gemini→第三方兜底」並持久化（原本只能改 .env 且需重啟）；開關只控制兜底，第三方模型照常直連呼叫、照常在 /v1/models |
 | 2026-06-22 20:06:08 | v1.6.24 - 🧩 自訂 Gem 支援：管理面板新增「Gem 管理」頁，可列出/新建/修改/刪除帳號下你自己建立的自訂 Gem，並把任意 Gem「暴露為模型名」——任何 OpenAI 相容客戶端用該模型名呼叫即以該 Gem 人設對話；Gem 綁定所屬帳號、呼叫只走綁定帳號不輪詢；刪 Gem 時自動清除對應模型映射 |
