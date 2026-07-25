@@ -40,6 +40,14 @@
     color: var(--primary-color);
 }
 
+.header h1 img.brand-logo {
+    height: 1.5rem;
+    width: auto;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+    display: inline-block;
+}
+
 .header-subtitle {
     font-size: 0.875rem;
     color: var(--text-secondary);
