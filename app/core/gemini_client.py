@@ -50,27 +50,32 @@ GEMINI_MODELS = {
     "gemini-3-pro": {"id": "9d8ca3786ebdfbea", "capacity": 1, "pro_only": False, "family": "pro"},
     "gemini-3-flash": {"id": "fbb127bbb056c959", "capacity": 1, "pro_only": False, "family": "flash"},
     "gemini-3-flash-thinking": {"id": "5bf011840784117a", "capacity": 1, "pro_only": False, "family": "flash-thinking"},
+    "gemini-3-flash-lite": {"id": "8c46e95b1a07cecc", "capacity": 1, "pro_only": False, "family": "flash-lite"},
     "gemini-3-pro-plus": {"id": "e6fa609c3fa255c0", "capacity": 4, "pro_only": True, "family": "pro"},
     "gemini-3-flash-plus": {"id": "56fdd199312815e2", "capacity": 4, "pro_only": True, "family": "flash"},
     "gemini-3-flash-thinking-plus": {"id": "e051ce1aa80aa576", "capacity": 4, "pro_only": True, "family": "flash-thinking"},
+    "gemini-3-flash-lite-plus": {"id": "8c46e95b1a07cecc", "capacity": 4, "pro_only": True, "family": "flash-lite"},
     "gemini-3-pro-advanced": {"id": "e6fa609c3fa255c0", "capacity": 2, "pro_only": True, "family": "pro"},
     "gemini-3-flash-advanced": {"id": "56fdd199312815e2", "capacity": 2, "pro_only": True, "family": "flash"},
     "gemini-3-flash-thinking-advanced": {"id": "e051ce1aa80aa576", "capacity": 2, "pro_only": True, "family": "flash-thinking"},
+    "gemini-3-flash-lite-advanced": {"id": "8c46e95b1a07cecc", "capacity": 2, "pro_only": True, "family": "flash-lite"},
 }
 
 # 对外暴露的稳定模型名（永不变，API 契约）。客户端只认这 3 个，
 # 内部按账号当前真实可用的模型动态映射，账号订阅等级/Google 灰度怎么变都不影响 API。
-PUBLIC_MODELS = ["gemini-pro", "gemini-flash", "gemini-flash-thinking"]
+PUBLIC_MODELS = ["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]
 _PUBLIC_FAMILY = {
     "gemini-pro": "pro",
     "gemini-flash": "flash",
     "gemini-flash-thinking": "flash-thinking",
+    "gemini-flash-lite": "flash-lite",
 }
 # 每个 family 的默认内部模型（账号没拉到真实模型时的兜底，按基础版）
 _FAMILY_DEFAULT = {
     "pro": "gemini-3-pro",
     "flash": "gemini-3-flash",
     "flash-thinking": "gemini-3-flash-thinking",
+    "flash-lite": "gemini-3-flash-lite",
 }
 
 MODEL_ALIASES = {
@@ -83,7 +88,7 @@ MODEL_ALIASES = {
     "gemini-2.5-flash-preview-05-20": "gemini-flash",
     "gemini-2.0-flash": "gemini-flash",
     "gemini-2.0-flash-thinking": "gemini-flash-thinking",
-    "gemini-2.0-flash-lite": "gemini-flash",
+    "gemini-2.0-flash-lite": "gemini-flash-lite",
     "gemini-1.5-pro": "gemini-pro",
     "gemini-1.5-flash": "gemini-flash",
 }
