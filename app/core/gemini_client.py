@@ -61,7 +61,7 @@ GEMINI_MODELS = {
     "gemini-3-flash-lite-advanced": {"id": "8c46e95b1a07cecc", "capacity": 2, "pro_only": True, "family": "flash-lite"},
 }
 
-# 对外暴露的稳定模型名（永不变，API 契约）。客户端只认这 3 个，
+# 对外暴露的稳定模型名（永不变，API 契约）。客户端只认这 4 个，
 # 内部按账号当前真实可用的模型动态映射，账号订阅等级/Google 灰度怎么变都不影响 API。
 PUBLIC_MODELS = ["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]
 _PUBLIC_FAMILY = {
