@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+## [1.6.28] - 2026-07-30
+
+### Added
+- 🆕 **新增 `gemini-flash-lite` 模型**：暴露 Gemini 最轻量的 Flash-Lite 档（3.5 Flash-Lite），在 Pro/Flash 被限额时仍有可用模型可选。内部按账号真实可用模型动态映射，沿用固定公开名的抽象。
+
 ## [1.6.27] - 2026-07-25
 
 ### Changed
