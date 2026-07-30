@@ -202,14 +202,21 @@ curl http://localhost:5918/openai/v1/models \
       "object": "model",
       "created": 1234567890,
       "owned_by": "google"
+    },
+    {
+      "id": "gemini-flash-lite",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "google"
     }
   ]
 }
 ```
 
-> 💡 **모델 선택 가이드**: 세 가지 모델은 서로 다른 속도/품질 트레이드오프를 제공합니다.
+> 💡 **모델 선택 가이드**: 네 가지 모델은 서로 다른 속도/품질 트레이드오프를 제공합니다.
 > - `gemini-flash`: 가장 빠름(응답 약 4-5초), **agent / 고빈도 / 고동시성** 시나리오에 적합, 기본 선택으로 권장.
 > - `gemini-flash-thinking`: 사고 과정 포함, 속도는 flash에 근접, 추론이 필요한 작업에 적합.
+> - `gemini-flash-lite`: 가장 가볍고 빠른 등급(3.5 Flash-Lite), Pro/Flash가 사용량 제한에 걸렸을 때 사용 가능한 대체 옵션.
 > - `gemini-pro`: 최고 품질이지만 느림(응답 약 9-17초, 긴 컨텍스트에서 더 느림), 품질 중시하고 지연 시간을 신경 쓰지 않는 시나리오에 적합.
 >
 > agent 클라이언트(많은 동시 요청 발행)는 `gemini-flash`를 우선 사용하는 것이 좋습니다. 본 서비스의 스트리밍 인터페이스는 진정한 증분 스트리밍으로, 첫 글자가 생성되는 즉시 푸시를 시작합니다.

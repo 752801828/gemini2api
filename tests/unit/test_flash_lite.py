@@ -64,3 +64,19 @@ def test_v1_models_includes_flash_lite(client):
     assert r.status_code == 200
     ids = [m["id"] for m in r.json()["data"]]
     assert "gemini-flash-lite" in ids
+
+
+def test_backfill_flash_lite_for_account_without_it():
+    # Known-limitation path: an account exposing only a cap-1 flash model must
+    # still get a flash-lite name via capacity backfill (same mechanism as the
+    # existing synthetic flash-thinking).
+    from app.core.gemini_client import GEMINI_MODELS
+    c = GeminiWebClient.__new__(GeminiWebClient)
+    c._family_model = {}
+    c._available_models = []
+    flash_base_id = GEMINI_MODELS["gemini-3-flash"]["id"]
+    body = list(range(15)) + [[[flash_base_id, "Flash", "All-around help"]]]
+    raw = json.dumps([["wrb.fr", None, json.dumps(body)]])
+    c._parse_models_from_status(raw)
+    assert c._family_model.get("flash") == "gemini-3-flash"
+    assert c._family_model.get("flash-lite") == "gemini-3-flash-lite"

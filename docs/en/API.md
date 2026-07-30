@@ -74,14 +74,21 @@ curl http://localhost:5918/openai/v1/models \
       "object": "model",
       "created": 1715970000,
       "owned_by": "google"
+    },
+    {
+      "id": "gemini-flash-lite",
+      "object": "model",
+      "created": 1715970000,
+      "owned_by": "google"
     }
   ]
 }
 ```
 
-> 💡 **Model Selection Guide**: The three models offer different speed/quality tradeoffs.
+> 💡 **Model Selection Guide**: The four models offer different speed/quality tradeoffs.
 > - `gemini-flash`: Fastest (response ~4-5 seconds), ideal for **agent / high-frequency / high-concurrency** scenarios, recommended as default.
 > - `gemini-flash-thinking`: Includes reasoning process, speed close to flash, suitable for tasks requiring inference.
+> - `gemini-flash-lite`: Lightest & fastest tier (3.5 Flash-Lite), a usable fallback when Pro/Flash hit rate limits.
 > - `gemini-pro`: Highest quality but slower (response ~9-17 seconds, longer with extended context), suitable for quality-critical scenarios where latency is not a concern.
 >
 > Agent clients (which issue many concurrent requests) should prioritize `gemini-flash`. This service's streaming interface is true incremental streaming, pushing tokens as soon as the first character is generated.

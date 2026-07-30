@@ -382,6 +382,7 @@ Gemini2API 对外提供 3 个固定的稳定模型名，永不变更。这些模
 | `gemini-pro` | Pro 模型，性能最强，适合复杂任务 |
 | `gemini-flash` | 快速模型，低延迟，适合实时应用 |
 | `gemini-flash-thinking` | 思考模型，支持深度推理和分析 |
+| `gemini-flash-lite` | 最轻量最快的模型（3.5 Flash-Lite），Pro/Flash 被限额时仍可用 |
 
 **内部自动映射**：服务内部会根据你的 Google 账号订阅等级（Advanced/Plus/Basic）自动映射到当前真实可用的模型版本。无论账号等级如何变化、Google 灰度发布如何调整、服务重启等，客户端始终使用这 3 个固定名称，无需修改。
 

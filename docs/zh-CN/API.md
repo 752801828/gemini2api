@@ -121,14 +121,21 @@ curl http://localhost:5918/openai/v1/models \
       "object": "model",
       "created": 1715970000,
       "owned_by": "gemini"
+    },
+    {
+      "id": "gemini-flash-lite",
+      "object": "model",
+      "created": 1715970000,
+      "owned_by": "gemini"
     }
   ]
 }
 ```
 
-> 💡 **模型选择建议**：三个模型对应不同的速度/质量权衡。
+> 💡 **模型选择建议**：四个模型对应不同的速度/质量权衡。
 > - `gemini-flash`：最快（响应约 4-5 秒），适合 **agent / 高频 / 高并发**场景，推荐作为默认选择。
 > - `gemini-flash-thinking`：带思考过程，速度接近 flash，适合需要推理的任务。
+> - `gemini-flash-lite`：最轻量最快的档位（3.5 Flash-Lite），Pro/Flash 被限额时可作为可用兜底。
 > - `gemini-pro`：质量最高但较慢（响应约 9-17 秒，长上下文更慢），适合对质量要求高、不在意延迟的场景。
 >
 > agent 类客户端（会并发发起大量请求）建议优先用 `gemini-flash`。本服务的流式接口为真正的增量流式，首字一生成即开始推送。

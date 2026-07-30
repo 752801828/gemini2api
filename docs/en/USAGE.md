@@ -315,6 +315,7 @@ Gemini2API provides 3 fixed stable model names that never change. These serve as
 | `gemini-pro` | Pro model with strongest performance, suitable for complex tasks |
 | `gemini-flash` | Fast model with low latency, suitable for real-time applications |
 | `gemini-flash-thinking` | Thinking model supporting deep reasoning and analysis |
+| `gemini-flash-lite` | Lightest & fastest model (3.5 Flash-Lite), usable when Pro/Flash are rate-limited |
 
 **Internal Auto-Mapping**: The service automatically maps these fixed names to the actual available models based on your Google account subscription level (Advanced/Plus/Basic). Regardless of account tier changes, Google rollouts, or service restarts, clients always use these 3 fixed names without modification.
 
