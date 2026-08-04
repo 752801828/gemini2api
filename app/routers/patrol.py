@@ -1,6 +1,9 @@
+import base64
+import binascii
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/admin/patrol", tags=["Patrol"])
@@ -11,11 +14,20 @@ class PatrolConfigUpdate(BaseModel):
     interval_minutes: int | None = Field(default=None, ge=1, le=10080)
     text_test_enabled: bool | None = None
     image_test_enabled: bool | None = None
-    model: Literal["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"] | None = None
+    models: list[Literal["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]] | None = Field(
+        default=None, min_length=1, max_length=4
+    )
+    image_min_count: int | None = Field(default=None, ge=1, le=5)
+    image_max_count: int | None = Field(default=None, ge=1, le=5)
     notify_enabled: bool | None = None
     webhook_url: str | None = Field(default=None, max_length=500)
     webhook_secret: str | None = Field(default=None, max_length=200)
     clear_webhook: bool = False
+
+
+class PatrolImageUpload(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    data_base64: str = Field(min_length=1, max_length=14_000_000)
 
 
 def _service(request: Request):
@@ -46,3 +58,28 @@ async def run_patrol(request: Request):
     if not round_id:
         raise HTTPException(status_code=409, detail="已有一轮盘巡正在执行")
     return {"status": "started", "round_id": round_id}
+
+
+@router.post("/images")
+async def upload_patrol_image(request: Request, upload: PatrolImageUpload):
+    try:
+        data = base64.b64decode(upload.data_base64, validate=True)
+        return {"status": "ok", "image": _service(request).add_image(upload.name, data)}
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "图片数据无效") from exc
+
+
+@router.get("/images/{image_id}")
+async def get_patrol_image(request: Request, image_id: str):
+    image = _service(request).get_image(image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    path, mime = image
+    return FileResponse(path, media_type=mime)
+
+
+@router.delete("/images/{image_id}")
+async def delete_patrol_image(request: Request, image_id: str):
+    if not _service(request).delete_image(image_id):
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return {"status": "ok"}

@@ -1,8 +1,9 @@
-import { apiCall } from './auth.js';
+import { apiCall, getToken } from './auth.js';
 import { showToast } from './utils.js';
 
 let timer = null;
 let isRunning = false;
+const thumbnailUrls = new Map();
 
 const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -10,12 +11,16 @@ const localTime = value => value ? new Date(value).toLocaleString('zh-CN', { hou
 const duration = ms => ms == null ? '—' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
 
 function render(data) {
-    const { config, stats, current, history, running, next_run_at: next } = data;
+    const { config, stats, current, history, images, running, next_run_at: next } = data;
     document.getElementById('patrol-enabled').checked = config.enabled;
     document.getElementById('patrol-interval').value = config.interval_minutes;
     document.getElementById('patrol-text-enabled').checked = config.text_test_enabled;
     document.getElementById('patrol-image-enabled').checked = config.image_test_enabled;
-    document.getElementById('patrol-model').value = config.model;
+    document.getElementById('patrol-image-min').value = config.image_min_count;
+    document.getElementById('patrol-image-max').value = config.image_max_count;
+    document.querySelectorAll('#patrol-models input').forEach(input => {
+        input.checked = (config.models || ['gemini-flash']).includes(input.value);
+    });
     document.getElementById('patrol-notify-enabled').checked = config.notify_enabled;
     text('patrol-webhook-state', config.webhook_configured ? `Webhook 已配置${config.secret_configured ? ' · 校验已开启' : ''}` : '尚未配置 Webhook');
 
@@ -35,18 +40,58 @@ function render(data) {
     runBtn.disabled = running;
     runBtn.innerHTML = running ? '<i class="fas fa-spinner fa-spin"></i> 盘巡进行中' : '<i class="fas fa-play"></i> 立即执行一轮';
 
+    renderImages(images || []);
     document.getElementById('patrol-history').innerHTML = history.length ? history.map(renderRound).join('') : '<div class="patrol-empty">暂无盘巡记录</div>';
+}
+
+function formatBytes(bytes) {
+    return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderImages(images) {
+    text('patrol-image-total', `${images.length} 张`);
+    const library = document.getElementById('patrol-image-library');
+    library.innerHTML = images.length ? images.map(image => `
+        <article class="patrol-image-card">
+            <img data-patrol-image="${escapeHtml(image.id)}" alt="${escapeHtml(image.name)}">
+            <button class="patrol-image-delete" type="button" data-delete-image="${escapeHtml(image.id)}" aria-label="删除 ${escapeHtml(image.name)}"><i class="fas fa-trash"></i></button>
+            <div class="patrol-image-meta"><b title="${escapeHtml(image.name)}">${escapeHtml(image.name)}</b><small>${formatBytes(image.size)}</small></div>
+        </article>`).join('') : '<div class="patrol-library-empty">还没有图片，上传后才能执行图文测试</div>';
+    hydrateImageThumbs();
+}
+
+async function hydrateImageThumbs() {
+    const token = getToken();
+    document.querySelectorAll('[data-patrol-image]').forEach(async image => {
+        if (thumbnailUrls.has(image.dataset.patrolImage)) {
+            image.src = thumbnailUrls.get(image.dataset.patrolImage);
+            return;
+        }
+        try {
+            const response = await fetch(`/admin/patrol/images/${encodeURIComponent(image.dataset.patrolImage)}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (!response.ok) return;
+            const url = URL.createObjectURL(await response.blob());
+            thumbnailUrls.set(image.dataset.patrolImage, url);
+            image.src = url;
+        } catch (_) {}
+    });
 }
 
 function renderRound(round) {
     const statusMap = { success: '全部通过', partial: '存在失败', failed: '执行失败', empty: '无任务', cancelled: '已取消', running: '执行中' };
-    const tasks = (round.tasks || []).map(task => `
+    const tasks = (round.tasks || []).map(task => {
+        const imageNames = task.image_samples || (task.image_sample ? [task.image_sample] : []);
+        return `
         <div class="patrol-task">
             <b title="${escapeHtml(task.account_id)}">${escapeHtml(task.account_label)}</b>
-            <span>${task.type === 'image' ? `图文 #${escapeHtml(task.image_sample || '-')}` : '文字'}</span>
+            <span title="${escapeHtml(imageNames.join('、'))}">${task.type === 'image' ? `图文 ${imageNames.length} 张` : '文字'}</span>
+            <span>${escapeHtml(task.model || '-')}</span>
             <span>${duration(task.duration_ms)}</span>
-            <span class="patrol-task-response ${task.success ? 'patrol-ok' : 'patrol-bad'}" title="${escapeHtml(task.response_preview || task.error)}">${task.success ? escapeHtml(task.response_preview || '成功') : escapeHtml(task.error || '失败')}</span>
-        </div>`).join('');
+            <span class="patrol-task-response ${task.success ? 'patrol-ok' : 'patrol-bad'}" title="问题：${escapeHtml(task.prompt || '-')}&#10;结果：${escapeHtml(task.response_preview || task.error)}">${task.success ? escapeHtml(task.response_preview || '成功') : escapeHtml(task.error || '失败')}</span>
+        </div>`;
+    }).join('');
     const notify = round.notification?.sent ? ' · 飞书已通知' : round.notification?.error ? ' · 飞书通知失败' : '';
     return `<details class="patrol-round">
         <summary>
@@ -74,7 +119,9 @@ async function saveConfig(event) {
         interval_minutes: Number(document.getElementById('patrol-interval').value),
         text_test_enabled: document.getElementById('patrol-text-enabled').checked,
         image_test_enabled: document.getElementById('patrol-image-enabled').checked,
-        model: document.getElementById('patrol-model').value,
+        image_min_count: Number(document.getElementById('patrol-image-min').value),
+        image_max_count: Number(document.getElementById('patrol-image-max').value),
+        models: [...document.querySelectorAll('#patrol-models input:checked')].map(input => input.value),
         notify_enabled: document.getElementById('patrol-notify-enabled').checked,
         webhook_url: document.getElementById('patrol-webhook').value.trim(),
         webhook_secret: document.getElementById('patrol-secret').value.trim(),
@@ -87,6 +134,53 @@ async function saveConfig(event) {
         await loadPatrol();
     } catch (error) {
         showToast(`保存失败：${error.message}`, 'error');
+    }
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',', 2)[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+    });
+}
+
+async function uploadImages(files) {
+    const allowed = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+    const selected = [...files];
+    if (!selected.length) return;
+    const button = document.getElementById('patrol-upload-btn');
+    button.disabled = true;
+    try {
+        for (let index = 0; index < selected.length; index++) {
+            const file = selected[index];
+            if (!allowed.has(file.type) || file.size > 10 * 1024 * 1024) {
+                throw new Error(`${file.name} 不是受支持的图片或超过 10 MB`);
+            }
+            button.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${index + 1}/${selected.length}`;
+            await apiCall('POST', '/admin/patrol/images', { name: file.name, data_base64: await fileToBase64(file) });
+        }
+        showToast(`已上传 ${selected.length} 张测试图片`, 'success');
+        await loadPatrol();
+    } catch (error) {
+        showToast(`上传失败：${error.message}`, 'error');
+    } finally {
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-cloud-arrow-up"></i> 上传图片';
+    }
+}
+
+async function deleteImage(imageId) {
+    if (!window.confirm('确定从盘巡素材库删除这张图片吗？')) return;
+    try {
+        await apiCall('DELETE', `/admin/patrol/images/${encodeURIComponent(imageId)}`);
+        if (thumbnailUrls.has(imageId)) URL.revokeObjectURL(thumbnailUrls.get(imageId));
+        thumbnailUrls.delete(imageId);
+        showToast('图片已删除', 'success');
+        await loadPatrol();
+    } catch (error) {
+        showToast(`删除失败：${error.message}`, 'error');
     }
 }
 
@@ -104,6 +198,16 @@ export function initPatrol() {
     document.getElementById('patrol-config-form')?.addEventListener('submit', saveConfig);
     document.getElementById('patrol-run-btn')?.addEventListener('click', runRound);
     document.getElementById('patrol-refresh-btn')?.addEventListener('click', loadPatrol);
+    const imageInput = document.getElementById('patrol-image-input');
+    document.getElementById('patrol-upload-btn')?.addEventListener('click', () => imageInput?.click());
+    imageInput?.addEventListener('change', event => {
+        uploadImages(event.target.files);
+        event.target.value = '';
+    });
+    document.getElementById('patrol-image-library')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-delete-image]');
+        if (button) deleteImage(button.dataset.deleteImage);
+    });
     clearInterval(timer);
     timer = setInterval(() => {
         if (isRunning && document.getElementById('patrol')?.classList.contains('active')) loadPatrol();

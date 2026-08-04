@@ -9,10 +9,9 @@ import hashlib
 import hmac
 import json
 import logging
+import random
 import secrets
-import struct
 import time
-import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -23,14 +22,31 @@ from app.utils.atomic_io import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-TEXT_PROMPT = "这是一次服务盘巡测试。请只回复：盘巡正常"
-IMAGE_PROMPT = "这是一次服务盘巡测试。请简要描述图片中的主要颜色和图案。"
+TEXT_PROMPTS = [
+    "这是一次服务盘巡测试。请只回复：盘巡正常",
+    "请计算 17 × 23，只回复计算结果。",
+    "请用一句不超过 20 个字的话说明什么是人工智能。",
+    "请列出春、夏、秋、冬四个季节，用中文顿号分隔。",
+    "请返回一个合法 JSON：包含 status 字段，值为 ok。不要使用 Markdown。",
+    "请把“服务运行正常”翻译成英文，只回复译文。",
+]
+IMAGE_PROMPTS = [
+    "请描述这些图片中的主要物体、颜色和场景。",
+    "请逐张概括图片内容，并指出图片之间最明显的共同点或差异。",
+    "请说明这些图片里最醒目的视觉元素，不要臆测看不见的信息。",
+    "请为每张图片写一句简短、客观的中文说明。",
+    "请判断这些图片大致属于什么场景，并给出简要依据。",
+]
+MODELS = ["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_CONFIG = {
     "enabled": False,
     "interval_minutes": 60,
     "text_test_enabled": True,
     "image_test_enabled": True,
-    "model": "gemini-flash",
+    "models": ["gemini-flash"],
+    "image_min_count": 1,
+    "image_max_count": 5,
     "notify_enabled": True,
     "webhook_url": "",
     "webhook_secret": "",
@@ -45,24 +61,16 @@ def _safe_error(exc: Exception) -> str:
     return str(exc).replace("\n", " ")[:300]
 
 
-def make_random_png(size: int = 64) -> tuple[bytes, str]:
-    """Create a small, dependency-free random PNG and return it with a sample id."""
-    seed = secrets.randbits(64)
-    colors = [secrets.token_bytes(3), secrets.token_bytes(3), secrets.token_bytes(3)]
-    rows = []
-    for y in range(size):
-        row = bytearray([0])
-        for x in range(size):
-            color = colors[((x // 8) + (y // 8) + (seed & 3)) % len(colors)]
-            row.extend(color)
-        rows.append(bytes(row))
-
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-
-    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
-    return png, f"{seed:016x}"[:8]
+def _detect_image_mime(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 class PatrolService:
@@ -71,10 +79,18 @@ class PatrolService:
         self.data_dir = Path(data_dir)
         self.config_path = self.data_dir / "patrol_config.json"
         self.history_path = self.data_dir / "patrol_history.json"
+        self.images_path = self.data_dir / "patrol_images.json"
+        self.images_dir = self.data_dir / "patrol_images"
         self.config = self._load_json(self.config_path, DEFAULT_CONFIG)
+        if self.config.get("model"):
+            self.config["models"] = [self.config["model"]]
+        self.config.pop("model", None)
         self.history = self._load_json(self.history_path, [])
         if not isinstance(self.history, list):
             self.history = []
+        self.images = self._load_json(self.images_path, [])
+        if not isinstance(self.images, list):
+            self.images = []
         self.current: dict | None = None
         self.next_run_at: str | None = None
         self._scheduler_task: asyncio.Task | None = None
@@ -101,6 +117,56 @@ class PatrolService:
         # ponytail: JSON is sufficient here; move to SQLite if 1,000 retained rounds become a real limit.
         self.history = self.history[-1000:]
         atomic_write_text(self.history_path, json.dumps(self.history, ensure_ascii=False, indent=2))
+
+    def _save_images(self) -> None:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(self.images_path, json.dumps(self.images, ensure_ascii=False, indent=2))
+
+    def list_images(self) -> list[dict]:
+        available = []
+        for item in self.images:
+            if (self.images_dir / item.get("stored_name", "")).is_file():
+                available.append({key: item[key] for key in ("id", "name", "mime", "size", "uploaded_at")})
+        return available
+
+    def add_image(self, name: str, data: bytes) -> dict:
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise ValueError("图片大小必须在 1 字节到 10 MB 之间")
+        mime = _detect_image_mime(data)
+        if not mime:
+            raise ValueError("仅支持 PNG、JPEG、GIF 和 WebP 图片")
+        image_id = secrets.token_hex(8)
+        ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}[mime]
+        stored_name = image_id + ext
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+        (self.images_dir / stored_name).write_bytes(data)
+        item = {
+            "id": image_id,
+            "name": Path(name).name[:120] or stored_name,
+            "stored_name": stored_name,
+            "mime": mime,
+            "size": len(data),
+            "uploaded_at": _now(),
+        }
+        self.images.append(item)
+        self._save_images()
+        return {key: item[key] for key in ("id", "name", "mime", "size", "uploaded_at")}
+
+    def get_image(self, image_id: str) -> tuple[Path, str] | None:
+        item = next((item for item in self.images if item.get("id") == image_id), None)
+        if not item:
+            return None
+        path = self.images_dir / item.get("stored_name", "")
+        return (path, item["mime"]) if path.is_file() else None
+
+    def delete_image(self, image_id: str) -> bool:
+        item = next((item for item in self.images if item.get("id") == image_id), None)
+        if not item:
+            return False
+        (self.images_dir / item.get("stored_name", "")).unlink(missing_ok=True)
+        self.images.remove(item)
+        self._save_images()
+        return True
 
     async def start(self) -> None:
         if not self._scheduler_task or self._scheduler_task.done():
@@ -144,6 +210,14 @@ class PatrolService:
         interval = int(merged.get("interval_minutes", 0))
         if not 1 <= interval <= 10080:
             raise ValueError("盘巡间隔需在 1 到 10080 分钟之间")
+        models = list(dict.fromkeys(merged.get("models") or []))
+        if not models or any(model not in MODELS for model in models):
+            raise ValueError("至少选择一个有效测试模型")
+        merged["models"] = models
+        image_min = int(merged.get("image_min_count", 1))
+        image_max = int(merged.get("image_max_count", 5))
+        if not 1 <= image_min <= image_max <= 5:
+            raise ValueError("图片随机张数需满足 1 ≤ 最少张数 ≤ 最多张数 ≤ 5")
         if merged.get("webhook_url"):
             parsed = urlparse(merged["webhook_url"])
             if parsed.scheme != "https" or parsed.hostname != "open.feishu.cn" or not parsed.path.startswith("/open-apis/bot/"):
@@ -236,19 +310,35 @@ class PatrolService:
                 "duration_ms": 0,
                 "response_preview": "",
                 "error": "",
-                "image_sample": None,
+                "model": "",
+                "prompt": "",
+                "image_samples": [],
             }
             try:
                 attachments = None
-                prompt = TEXT_PROMPT
+                model = random.choice(self.config.get("models") or ["gemini-flash"])
+                prompt = random.choice(TEXT_PROMPTS)
                 if test_type == "image":
-                    image, sample_id = make_random_png()
-                    result["image_sample"] = sample_id
-                    prompt = IMAGE_PROMPT
-                    attachments = [{"data": image, "filename": f"patrol-{sample_id}.png", "mime": "image/png"}]
+                    images = self.list_images()
+                    if not images:
+                        raise ValueError("图片素材库为空，请先上传测试图片")
+                    count = random.randint(self.config.get("image_min_count", 1), self.config.get("image_max_count", 5))
+                    selected = random.sample(images, min(count, len(images)))
+                    prompt = random.choice(IMAGE_PROMPTS)
+                    attachments = []
+                    for image in selected:
+                        source = self.get_image(image["id"])
+                        if source:
+                            path, mime = source
+                            attachments.append({"data": path.read_bytes(), "filename": image["name"], "mime": mime})
+                    if not attachments:
+                        raise ValueError("选中的图片素材不可用")
+                    result["image_samples"] = [image["name"] for image in selected]
+                result["model"] = model
+                result["prompt"] = prompt
                 response = await self.account_pool.generate(
                     prompt,
-                    self.config.get("model", "gemini-flash"),
+                    model,
                     attachments=attachments,
                     account_id=account.get("id"),
                 )
@@ -319,6 +409,7 @@ class PatrolService:
         latest = self.current or (self.history[-1] if self.history else None)
         return {
             "config": self.public_config(),
+            "images": self.list_images(),
             "running": bool(self._round_task and not self._round_task.done()),
             "next_run_at": self.next_run_at,
             "current": copy.deepcopy(latest),

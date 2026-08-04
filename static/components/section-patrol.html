@@ -1,10 +1,10 @@
-<link rel="stylesheet" href="components/section-patrol.css?v=1">
+<link rel="stylesheet" href="components/section-patrol.css?v=2">
 <section id="patrol" class="section patrol-section" aria-labelledby="patrol-title">
     <div class="section-header patrol-heading">
         <div>
             <p class="patrol-kicker">SERVICE SENTINEL</p>
             <h2 id="patrol-title">盘巡中心</h2>
-            <p class="patrol-subtitle">定时验证每个账号的文字与图文能力，并在轮次结束后汇报飞书。</p>
+            <p class="patrol-subtitle">随机问题、随机模型、随机图片组合，持续验证每个账号的真实可用性。</p>
         </div>
         <button class="btn btn-primary" id="patrol-run-btn"><i class="fas fa-play"></i> 立即执行一轮</button>
     </div>
@@ -33,6 +33,18 @@
         </article>
     </div>
 
+    <div class="patrol-panel patrol-library">
+        <div class="patrol-panel-title">
+            <div><span>图文测试素材库</span><small>先上传你的图片；执行时只会从这里随机抽取，不会生成新图片</small></div>
+            <div class="patrol-upload-actions">
+                <span id="patrol-image-total" class="patrol-library-count">0 张</span>
+                <button class="btn btn-sm btn-outline" type="button" id="patrol-upload-btn"><i class="fas fa-cloud-arrow-up"></i> 上传图片</button>
+                <input id="patrol-image-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+            </div>
+        </div>
+        <div id="patrol-image-library" class="patrol-image-library"><div class="patrol-library-empty">还没有图片，上传后才能执行图文测试</div></div>
+    </div>
+
     <div class="patrol-layout">
         <form class="patrol-panel patrol-config" id="patrol-config-form">
             <div class="patrol-panel-title">
@@ -44,16 +56,23 @@
             <input class="form-control" id="patrol-interval" type="number" min="1" max="10080" value="60" required>
 
             <span class="form-label patrol-label">测试项目</span>
-            <label class="patrol-check"><input type="checkbox" id="patrol-text-enabled" checked><span><b>文字测试</b><small>固定指令：只回复“盘巡正常”</small></span></label>
-            <label class="patrol-check"><input type="checkbox" id="patrol-image-enabled" checked><span><b>图文测试</b><small>每个任务生成一张随机 PNG 样本</small></span></label>
+            <label class="patrol-check"><input type="checkbox" id="patrol-text-enabled" checked><span><b>文字测试</b><small>从 6 套计算、翻译、格式与常识模板中随机提问</small></span></label>
+            <label class="patrol-check"><input type="checkbox" id="patrol-image-enabled" checked><span><b>图文测试</b><small>随机抽取已上传图片，并搭配 5 套描述类问题</small></span></label>
 
-            <label class="form-label" for="patrol-model">测试模型</label>
-            <select class="form-control" id="patrol-model">
-                <option value="gemini-flash">gemini-flash</option>
-                <option value="gemini-flash-lite">gemini-flash-lite</option>
-                <option value="gemini-pro">gemini-pro</option>
-                <option value="gemini-flash-thinking">gemini-flash-thinking</option>
-            </select>
+            <span class="form-label patrol-label">随机图片张数</span>
+            <div class="patrol-count-range">
+                <label><small>最少</small><input class="form-control" id="patrol-image-min" type="number" min="1" max="5" value="1"></label>
+                <span>至</span>
+                <label><small>最多</small><input class="form-control" id="patrol-image-max" type="number" min="1" max="5" value="5"></label>
+            </div>
+
+            <span class="form-label patrol-label">测试模型（多选后每个任务随机）</span>
+            <div class="patrol-model-grid" id="patrol-models">
+                <label><input type="checkbox" value="gemini-flash" checked><span>Flash</span></label>
+                <label><input type="checkbox" value="gemini-flash-lite"><span>Flash Lite</span></label>
+                <label><input type="checkbox" value="gemini-pro"><span>Pro</span></label>
+                <label><input type="checkbox" value="gemini-flash-thinking"><span>Thinking</span></label>
+            </div>
 
             <div class="patrol-divider"></div>
             <div class="patrol-notify-row">
