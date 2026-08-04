@@ -67,7 +67,7 @@
 .patrol-switch input:checked + span { background: var(--primary-color); }
 .patrol-switch input:checked + span::after { transform: translateX(18px); }
 .patrol-save { width: 100%; margin-top: 0.2rem; }
-.patrol-history { display: flex; flex-direction: column; gap: 0.65rem; max-height: 690px; overflow: auto; padding-right: 0.15rem; }
+.patrol-history { display: flex; flex-direction: column; gap: 0.65rem; }
 .patrol-round { border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-secondary); }
 .patrol-round summary { list-style: none; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.8rem; padding: 0.95rem 1rem; background: var(--bg-primary); }
 .patrol-round summary::-webkit-details-marker { display: none; }
@@ -92,6 +92,11 @@
 .patrol-task-field.wide { grid-column: 1 / -1; }
 .patrol-task-field span { display: block; margin-bottom: 0.25rem; color: var(--text-tertiary); font-size: 0.68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .patrol-task-field p { margin: 0; color: var(--text-primary); font-size: 0.8rem; white-space: pre-wrap; word-break: break-word; }
+.patrol-task-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.65rem; }
+.patrol-task-images figure { overflow: hidden; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); }
+.patrol-task-images img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: var(--bg-tertiary); }
+.patrol-task-images figcaption, .patrol-task-image-missing { padding: 0.5rem 0.6rem; color: var(--text-secondary); font-size: 0.72rem; overflow-wrap: anywhere; }
+.patrol-task-image-missing { display: flex; align-items: center; gap: 0.4rem; min-height: 52px; border: 1px dashed var(--border-color); border-radius: var(--radius-lg); }
 .patrol-ok { color: var(--success-color); font-weight: 700; }
 .patrol-bad { color: var(--danger-color); font-weight: 700; }
 .patrol-empty { display: grid; place-items: center; min-height: 200px; color: var(--text-tertiary); }

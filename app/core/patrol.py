@@ -315,10 +315,12 @@ class PatrolService:
                 "sequence": sequence,
                 "success": False,
                 "duration_ms": 0,
+                "response": "",
                 "response_preview": "",
                 "error": "",
                 "model": "",
                 "prompt": "",
+                "image_sample_ids": [],
                 "image_samples": [],
             }
             try:
@@ -340,6 +342,7 @@ class PatrolService:
                             attachments.append({"data": path.read_bytes(), "filename": image["name"], "mime": mime})
                     if not attachments:
                         raise ValueError("选中的图片素材不可用")
+                    result["image_sample_ids"] = [image["id"] for image in selected]
                     result["image_samples"] = [image["name"] for image in selected]
                 result["model"] = model
                 result["prompt"] = prompt
@@ -351,6 +354,7 @@ class PatrolService:
                 )
                 text = str(response.get("text", "")).strip()
                 result["success"] = bool(text)
+                result["response"] = text
                 result["response_preview"] = text[:300]
                 if not text:
                     result["error"] = "模型返回空内容"

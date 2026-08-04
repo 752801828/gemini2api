@@ -42,8 +42,10 @@ function render(data) {
     runBtn.disabled = running;
     runBtn.innerHTML = running ? '<i class="fas fa-spinner fa-spin"></i> 盘巡进行中' : '<i class="fas fa-play"></i> 立即执行一轮';
 
+    const imageLookup = new Map((images || []).map(image => [image.name, image.id]));
     renderImages(images || []);
-    document.getElementById('patrol-history').innerHTML = history.length ? history.map(renderRound).join('') : '<div class="patrol-empty">暂无盘巡记录</div>';
+    document.getElementById('patrol-history').innerHTML = history.length ? history.map(round => renderRound(round, imageLookup)).join('') : '<div class="patrol-empty">暂无盘巡记录</div>';
+    hydrateImageThumbs();
 }
 
 function formatBytes(bytes) {
@@ -59,7 +61,6 @@ function renderImages(images) {
             <button class="patrol-image-delete" type="button" data-delete-image="${escapeHtml(image.id)}" aria-label="删除 ${escapeHtml(image.name)}"><i class="fas fa-trash"></i></button>
             <div class="patrol-image-meta"><b title="${escapeHtml(image.name)}">${escapeHtml(image.name)}</b><small>${formatBytes(image.size)}</small></div>
         </article>`).join('') : '<div class="patrol-library-empty">还没有图片，上传后才能执行图文测试</div>';
-    hydrateImageThumbs();
 }
 
 async function hydrateImageThumbs() {
@@ -81,12 +82,15 @@ async function hydrateImageThumbs() {
     });
 }
 
-function renderRound(round) {
+function renderRound(round, imageLookup) {
     const statusMap = { success: '全部通过', partial: '存在失败', failed: '执行失败', empty: '无任务', cancelled: '已取消', running: '执行中' };
     const tasks = (round.tasks || []).map(task => {
         const imageNames = task.image_samples || (task.image_sample ? [task.image_sample] : []);
+        const imageIds = task.image_sample_ids || [];
+        const imageItems = imageNames.map((name, index) => ({ name, id: imageIds[index] || imageLookup.get(name) || '' }));
         const typeLabel = task.type === 'image' ? '图文' : '文字';
         const resultText = task.success ? task.response_preview || '成功' : task.error || '失败';
+        const detailText = task.success ? task.response || task.response_preview || '成功' : task.error || '失败';
         return `
         <details class="patrol-task-detail">
             <summary class="patrol-task">
@@ -102,8 +106,8 @@ function renderRound(round) {
                 <div class="patrol-task-field"><span>模型</span><p>${escapeHtml(task.model || '-')}</p></div>
                 <div class="patrol-task-field"><span>状态 / 耗时</span><p class="${task.success ? 'patrol-ok' : 'patrol-bad'}">${task.success ? '成功' : '失败'} · ${duration(task.duration_ms)}</p></div>
                 <div class="patrol-task-field wide"><span>随机问题</span><p>${escapeHtml(task.prompt || '-')}</p></div>
-                ${imageNames.length ? `<div class="patrol-task-field wide"><span>选中图片</span><p>${escapeHtml(imageNames.join('、'))}</p></div>` : ''}
-                <div class="patrol-task-field wide"><span>${task.success ? '模型响应' : '错误信息'}</span><p>${escapeHtml(resultText)}</p></div>
+                ${imageItems.length ? `<div class="patrol-task-field wide"><span>选中图片（${imageItems.length} 张）</span><div class="patrol-task-images">${imageItems.map(image => image.id ? `<figure><img data-patrol-image="${escapeHtml(image.id)}" alt="${escapeHtml(image.name)}"><figcaption>${escapeHtml(image.name)}</figcaption></figure>` : `<div class="patrol-task-image-missing"><i class="fas fa-image"></i>${escapeHtml(image.name)}</div>`).join('')}</div></div>` : ''}
+                <div class="patrol-task-field wide"><span>${task.success ? '模型响应' : '错误信息'}</span><p>${escapeHtml(detailText)}</p></div>
             </div>
         </details>`;
     }).join('');

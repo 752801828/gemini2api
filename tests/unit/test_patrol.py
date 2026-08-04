@@ -18,7 +18,7 @@ class FakePool:
         if attachments:
             assert attachments[0]["data"].startswith(b"\x89PNG\r\n\x1a\n")
         self.calls.append({"prompt": prompt, "model": model, "attachments": attachments})
-        return {"text": "盘巡正常"}
+        return {"text": "盘巡正常" * 100}
 
 
 def test_image_library_and_secret_masking(tmp_path):
@@ -59,4 +59,7 @@ def test_round_records_text_and_random_image_results(tmp_path):
     assert overview["history"][0]["tasks"][0]["prompt"] in TEXT_PROMPTS
     assert overview["history"][0]["tasks"][2]["prompt"] in IMAGE_PROMPTS
     assert 1 <= len(overview["history"][0]["tasks"][2]["image_samples"]) <= 2
+    assert len(overview["history"][0]["tasks"][2]["response"]) == 400
+    assert len(overview["history"][0]["tasks"][2]["response_preview"]) == 300
+    assert len(overview["history"][0]["tasks"][2]["image_sample_ids"]) == len(overview["history"][0]["tasks"][2]["image_samples"])
     assert all(call["model"] in {"gemini-flash", "gemini-pro"} for call in pool.calls)
