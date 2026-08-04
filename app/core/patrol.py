@@ -44,6 +44,8 @@ DEFAULT_CONFIG = {
     "interval_minutes": 60,
     "text_test_enabled": True,
     "image_test_enabled": True,
+    "text_test_count": 1,
+    "image_test_count": 1,
     "models": ["gemini-flash"],
     "image_min_count": 1,
     "image_max_count": 5,
@@ -218,6 +220,10 @@ class PatrolService:
         image_max = int(merged.get("image_max_count", 5))
         if not 1 <= image_min <= image_max <= 5:
             raise ValueError("图片随机张数需满足 1 ≤ 最少张数 ≤ 最多张数 ≤ 5")
+        if not 1 <= int(merged.get("text_test_count", 1)) <= 20:
+            raise ValueError("文字测试次数需在 1 到 20 之间")
+        if not 1 <= int(merged.get("image_test_count", 1)) <= 20:
+            raise ValueError("图文测试次数需在 1 到 20 之间")
         if merged.get("webhook_url"):
             parsed = urlparse(merged["webhook_url"])
             if parsed.scheme != "https" or parsed.hostname != "open.feishu.cn" or not parsed.path.startswith("/open-apis/bot/"):
@@ -261,11 +267,11 @@ class PatrolService:
     async def _run_round(self, round_id: str, trigger: str) -> None:
         started = time.perf_counter()
         accounts = self.account_pool.get_status().get("accounts", [])
-        test_types = []
+        test_specs = []
         if self.config.get("text_test_enabled"):
-            test_types.append("text")
+            test_specs.extend(("text", sequence) for sequence in range(1, self.config.get("text_test_count", 1) + 1))
         if self.config.get("image_test_enabled"):
-            test_types.append("image")
+            test_specs.extend(("image", sequence) for sequence in range(1, self.config.get("image_test_count", 1) + 1))
         self.current = {
             "id": round_id,
             "trigger": trigger,
@@ -273,14 +279,14 @@ class PatrolService:
             "started_at": _now(),
             "finished_at": None,
             "duration_ms": None,
-            "total": len(accounts) * len(test_types),
+            "total": len(accounts) * len(test_specs),
             "success": 0,
             "failed": 0,
             "notification": {"sent": False, "error": ""},
             "tasks": [],
         }
         try:
-            await asyncio.gather(*(self._test_account(account, test_types) for account in accounts))
+            await asyncio.gather(*(self._test_account(account, test_specs) for account in accounts))
             self.current["status"] = "success" if self.current["failed"] == 0 else "partial"
             if self.current["total"] == 0:
                 self.current["status"] = "empty"
@@ -299,13 +305,14 @@ class PatrolService:
             self.history.append(copy.deepcopy(self.current))
             self._save_history()
 
-    async def _test_account(self, account: dict, test_types: list[str]) -> None:
-        for test_type in test_types:
+    async def _test_account(self, account: dict, test_specs: list[tuple[str, int]]) -> None:
+        for test_type, sequence in test_specs:
             started = time.perf_counter()
             result = {
                 "account_id": account.get("id", ""),
                 "account_label": account.get("label") or account.get("id", ""),
                 "type": test_type,
+                "sequence": sequence,
                 "success": False,
                 "duration_ms": 0,
                 "response_preview": "",

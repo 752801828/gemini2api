@@ -16,6 +16,8 @@ function render(data) {
     document.getElementById('patrol-interval').value = config.interval_minutes;
     document.getElementById('patrol-text-enabled').checked = config.text_test_enabled;
     document.getElementById('patrol-image-enabled').checked = config.image_test_enabled;
+    document.getElementById('patrol-text-count').value = config.text_test_count || 1;
+    document.getElementById('patrol-image-count').value = config.image_test_count || 1;
     document.getElementById('patrol-image-min').value = config.image_min_count;
     document.getElementById('patrol-image-max').value = config.image_max_count;
     document.querySelectorAll('#patrol-models input').forEach(input => {
@@ -83,14 +85,27 @@ function renderRound(round) {
     const statusMap = { success: '全部通过', partial: '存在失败', failed: '执行失败', empty: '无任务', cancelled: '已取消', running: '执行中' };
     const tasks = (round.tasks || []).map(task => {
         const imageNames = task.image_samples || (task.image_sample ? [task.image_sample] : []);
+        const typeLabel = task.type === 'image' ? '图文' : '文字';
+        const resultText = task.success ? task.response_preview || '成功' : task.error || '失败';
         return `
-        <div class="patrol-task">
-            <b title="${escapeHtml(task.account_id)}">${escapeHtml(task.account_label)}</b>
-            <span title="${escapeHtml(imageNames.join('、'))}">${task.type === 'image' ? `图文 ${imageNames.length} 张` : '文字'}</span>
-            <span>${escapeHtml(task.model || '-')}</span>
-            <span>${duration(task.duration_ms)}</span>
-            <span class="patrol-task-response ${task.success ? 'patrol-ok' : 'patrol-bad'}" title="问题：${escapeHtml(task.prompt || '-')}&#10;结果：${escapeHtml(task.response_preview || task.error)}">${task.success ? escapeHtml(task.response_preview || '成功') : escapeHtml(task.error || '失败')}</span>
-        </div>`;
+        <details class="patrol-task-detail">
+            <summary class="patrol-task">
+                <b title="${escapeHtml(task.account_id)}">${escapeHtml(task.account_label)}</b>
+                <span title="${escapeHtml(imageNames.join('、'))}">${typeLabel} #${task.sequence || 1}${task.type === 'image' ? ` · ${imageNames.length} 张` : ''}</span>
+                <span>${escapeHtml(task.model || '-')}</span>
+                <span>${duration(task.duration_ms)}</span>
+                <span class="patrol-task-response ${task.success ? 'patrol-ok' : 'patrol-bad'}">${escapeHtml(resultText)}</span>
+                <i class="fas fa-chevron-down patrol-task-chevron"></i>
+            </summary>
+            <div class="patrol-task-info">
+                <div class="patrol-task-field"><span>任务</span><p>${typeLabel}测试 #${task.sequence || 1}</p></div>
+                <div class="patrol-task-field"><span>模型</span><p>${escapeHtml(task.model || '-')}</p></div>
+                <div class="patrol-task-field"><span>状态 / 耗时</span><p class="${task.success ? 'patrol-ok' : 'patrol-bad'}">${task.success ? '成功' : '失败'} · ${duration(task.duration_ms)}</p></div>
+                <div class="patrol-task-field wide"><span>随机问题</span><p>${escapeHtml(task.prompt || '-')}</p></div>
+                ${imageNames.length ? `<div class="patrol-task-field wide"><span>选中图片</span><p>${escapeHtml(imageNames.join('、'))}</p></div>` : ''}
+                <div class="patrol-task-field wide"><span>${task.success ? '模型响应' : '错误信息'}</span><p>${escapeHtml(resultText)}</p></div>
+            </div>
+        </details>`;
     }).join('');
     const notify = round.notification?.sent ? ' · 飞书已通知' : round.notification?.error ? ' · 飞书通知失败' : '';
     return `<details class="patrol-round">
@@ -119,6 +134,8 @@ async function saveConfig(event) {
         interval_minutes: Number(document.getElementById('patrol-interval').value),
         text_test_enabled: document.getElementById('patrol-text-enabled').checked,
         image_test_enabled: document.getElementById('patrol-image-enabled').checked,
+        text_test_count: Number(document.getElementById('patrol-text-count').value),
+        image_test_count: Number(document.getElementById('patrol-image-count').value),
         image_min_count: Number(document.getElementById('patrol-image-min').value),
         image_max_count: Number(document.getElementById('patrol-image-max').value),
         models: [...document.querySelectorAll('#patrol-models input:checked')].map(input => input.value),

@@ -14,6 +14,8 @@ class PatrolConfigUpdate(BaseModel):
     interval_minutes: int | None = Field(default=None, ge=1, le=10080)
     text_test_enabled: bool | None = None
     image_test_enabled: bool | None = None
+    text_test_count: int | None = Field(default=None, ge=1, le=20)
+    image_test_count: int | None = Field(default=None, ge=1, le=20)
     models: list[Literal["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]] | None = Field(
         default=None, min_length=1, max_length=4
     )

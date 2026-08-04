@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="components/section-patrol.css?v=2">
+<link rel="stylesheet" href="components/section-patrol.css?v=3">
 <section id="patrol" class="section patrol-section" aria-labelledby="patrol-title">
     <div class="section-header patrol-heading">
         <div>
@@ -52,42 +52,51 @@
                 <label class="patrol-switch"><input type="checkbox" id="patrol-enabled"><span></span></label>
             </div>
 
-            <label class="form-label" for="patrol-interval">每轮间隔（分钟）</label>
-            <input class="form-control" id="patrol-interval" type="number" min="1" max="10080" value="60" required>
+            <div class="patrol-config-body">
+                <div class="patrol-config-column">
+                    <label class="form-label" for="patrol-interval">每轮间隔（分钟）</label>
+                    <input class="form-control" id="patrol-interval" type="number" min="1" max="10080" value="60" required>
+                    <span class="form-label patrol-label">每账号每轮测试次数</span>
+                    <div class="patrol-test-counters">
+                        <label><span><b>文字</b><small>独立任务数</small></span><input class="form-control" id="patrol-text-count" type="number" min="1" max="20" value="1"></label>
+                        <label><span><b>图文</b><small>独立任务数</small></span><input class="form-control" id="patrol-image-count" type="number" min="1" max="20" value="1"></label>
+                    </div>
+                    <label class="patrol-check"><input type="checkbox" id="patrol-text-enabled" checked><span><b>文字测试</b><small>6 套模板随机提问</small></span></label>
+                    <label class="patrol-check"><input type="checkbox" id="patrol-image-enabled" checked><span><b>图文测试</b><small>上传图片搭配 5 套描述问题</small></span></label>
+                </div>
 
-            <span class="form-label patrol-label">测试项目</span>
-            <label class="patrol-check"><input type="checkbox" id="patrol-text-enabled" checked><span><b>文字测试</b><small>从 6 套计算、翻译、格式与常识模板中随机提问</small></span></label>
-            <label class="patrol-check"><input type="checkbox" id="patrol-image-enabled" checked><span><b>图文测试</b><small>随机抽取已上传图片，并搭配 5 套描述类问题</small></span></label>
+                <div class="patrol-config-column">
+                    <span class="form-label patrol-label">每次图文任务随机图片张数</span>
+                    <div class="patrol-count-range">
+                        <label><small>最少</small><input class="form-control" id="patrol-image-min" type="number" min="1" max="5" value="1"></label>
+                        <span>至</span>
+                        <label><small>最多</small><input class="form-control" id="patrol-image-max" type="number" min="1" max="5" value="5"></label>
+                    </div>
+                    <span class="form-label patrol-label">测试模型（多选后每个任务随机）</span>
+                    <div class="patrol-model-grid" id="patrol-models">
+                        <label><input type="checkbox" value="gemini-flash" checked><span>Flash</span></label>
+                        <label><input type="checkbox" value="gemini-flash-lite"><span>Flash Lite</span></label>
+                        <label><input type="checkbox" value="gemini-pro"><span>Pro</span></label>
+                        <label><input type="checkbox" value="gemini-flash-thinking"><span>Thinking</span></label>
+                    </div>
+                </div>
 
-            <span class="form-label patrol-label">随机图片张数</span>
-            <div class="patrol-count-range">
-                <label><small>最少</small><input class="form-control" id="patrol-image-min" type="number" min="1" max="5" value="1"></label>
-                <span>至</span>
-                <label><small>最多</small><input class="form-control" id="patrol-image-max" type="number" min="1" max="5" value="5"></label>
+                <div class="patrol-config-column">
+                    <div class="patrol-notify-row">
+                        <div><b>飞书通知</b><small id="patrol-webhook-state">尚未配置 Webhook</small></div>
+                        <label class="patrol-switch"><input type="checkbox" id="patrol-notify-enabled" checked><span></span></label>
+                    </div>
+                    <input class="form-control" id="patrol-webhook" type="url" placeholder="留空则保留当前 Webhook">
+                    <input class="form-control" id="patrol-secret" type="password" autocomplete="new-password" placeholder="留空则保留当前校验密钥">
+                </div>
             </div>
-
-            <span class="form-label patrol-label">测试模型（多选后每个任务随机）</span>
-            <div class="patrol-model-grid" id="patrol-models">
-                <label><input type="checkbox" value="gemini-flash" checked><span>Flash</span></label>
-                <label><input type="checkbox" value="gemini-flash-lite"><span>Flash Lite</span></label>
-                <label><input type="checkbox" value="gemini-pro"><span>Pro</span></label>
-                <label><input type="checkbox" value="gemini-flash-thinking"><span>Thinking</span></label>
-            </div>
-
-            <div class="patrol-divider"></div>
-            <div class="patrol-notify-row">
-                <div><b>飞书通知</b><small id="patrol-webhook-state">尚未配置 Webhook</small></div>
-                <label class="patrol-switch"><input type="checkbox" id="patrol-notify-enabled" checked><span></span></label>
-            </div>
-            <input class="form-control" id="patrol-webhook" type="url" placeholder="留空则保留当前 Webhook">
-            <input class="form-control" id="patrol-secret" type="password" autocomplete="new-password" placeholder="留空则保留当前校验密钥">
 
             <button class="btn btn-primary patrol-save" type="submit"><i class="fas fa-check"></i> 保存盘巡设置</button>
         </form>
 
         <div class="patrol-panel patrol-history-panel">
             <div class="patrol-panel-title">
-                <div><span>轮次记录</span><small>点击轮次查看账号级结果、耗时和响应摘要</small></div>
+                <div><span>轮次记录</span><small>先展开轮次，再点击具体任务查看完整问题、图片、响应和耗时</small></div>
                 <button class="btn btn-sm btn-outline" type="button" id="patrol-refresh-btn"><i class="fas fa-rotate"></i></button>
             </div>
             <div id="patrol-history" class="patrol-history"><div class="patrol-empty">暂无盘巡记录</div></div>

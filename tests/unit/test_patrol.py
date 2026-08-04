@@ -45,15 +45,18 @@ def test_round_records_text_and_random_image_results(tmp_path):
     service.add_image("two.png", PNG + b"2")
     service.update_config({
         "models": ["gemini-flash", "gemini-pro"],
+        "text_test_count": 2,
+        "image_test_count": 3,
         "image_min_count": 1,
         "image_max_count": 2,
     })
     asyncio.run(service._run_round("round-1", "manual"))
 
     overview = service.overview()
-    assert overview["stats"]["history"] == {"rounds": 1, "tasks": 2, "success": 2}
-    assert [task["type"] for task in overview["history"][0]["tasks"]] == ["text", "image"]
+    assert overview["stats"]["history"] == {"rounds": 1, "tasks": 5, "success": 5}
+    assert [task["type"] for task in overview["history"][0]["tasks"]] == ["text", "text", "image", "image", "image"]
+    assert [task["sequence"] for task in overview["history"][0]["tasks"]] == [1, 2, 1, 2, 3]
     assert overview["history"][0]["tasks"][0]["prompt"] in TEXT_PROMPTS
-    assert overview["history"][0]["tasks"][1]["prompt"] in IMAGE_PROMPTS
-    assert 1 <= len(overview["history"][0]["tasks"][1]["image_samples"]) <= 2
+    assert overview["history"][0]["tasks"][2]["prompt"] in IMAGE_PROMPTS
+    assert 1 <= len(overview["history"][0]["tasks"][2]["image_samples"]) <= 2
     assert all(call["model"] in {"gemini-flash", "gemini-pro"} for call in pool.calls)
