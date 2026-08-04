@@ -34,9 +34,7 @@ class HTTPStatusError(Exception):
 
 
 GEMINI_APP_URL = "https://gemini.google.com/app"
-GEMINI_HOME_URL = "https://gemini.google.com/?hl=en"
 GEMINI_APP_EN_URL = "https://gemini.google.com/app?hl=en"
-GOOGLE_HOME_URL = "https://www.google.com/"
 ROTATE_COOKIES_URL = "https://accounts.google.com/RotateCookies"
 GENERATE_URL = (
     "https://gemini.google.com/_/BardChatUi/data/"
@@ -523,23 +521,18 @@ class GeminiWebClient:
     async def _obtain_session_token(self):
         try:
             await self._ensure_session_current()
+            # Auxiliary Google cookies can outlive their anti-abuse challenge and
+            # trap Gemini in a /sorry/index redirect loop. Let Gemini issue fresh
+            # ones from the two account credentials on every token refresh.
+            auth_cookie_names = {"__Secure-1PSID", "__Secure-1PSIDTS"}
+            for name in self._cookie_jar.cookie_names():
+                if name not in auth_cookie_names:
+                    self._cookie_jar.remove(name)
             cookies = self._get_cookies()
             headers = self._get_headers("GET")
 
             await apply_jitter("navigation")
             self._clear_session_cookies()
-            resp = await self._http.get(GOOGLE_HOME_URL, cookies=cookies, headers=headers)
-            self._cookie_jar.update_from_response(resp)
-
-            await apply_jitter("navigation")
-            self._clear_session_cookies()
-            cookies = self._get_cookies()
-            resp = await self._http.get(GEMINI_HOME_URL, cookies=cookies, headers=headers)
-            self._cookie_jar.update_from_response(resp)
-
-            await apply_jitter("navigation")
-            self._clear_session_cookies()
-            cookies = self._get_cookies()
             resp = await self._http.get(GEMINI_APP_EN_URL, cookies=cookies, headers=headers)
             self._cookie_jar.update_from_response(resp)
 
