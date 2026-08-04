@@ -1,0 +1,77 @@
+<link rel="stylesheet" href="components/section-patrol.css?v=1">
+<section id="patrol" class="section patrol-section" aria-labelledby="patrol-title">
+    <div class="section-header patrol-heading">
+        <div>
+            <p class="patrol-kicker">SERVICE SENTINEL</p>
+            <h2 id="patrol-title">盘巡中心</h2>
+            <p class="patrol-subtitle">定时验证每个账号的文字与图文能力，并在轮次结束后汇报飞书。</p>
+        </div>
+        <button class="btn btn-primary" id="patrol-run-btn"><i class="fas fa-play"></i> 立即执行一轮</button>
+    </div>
+
+    <div class="patrol-livebar" id="patrol-livebar">
+        <span class="patrol-live-dot"></span>
+        <strong id="patrol-state">等待数据</strong>
+        <span id="patrol-next-run">—</span>
+    </div>
+
+    <div class="patrol-stats">
+        <article class="patrol-stat">
+            <span>今日任务</span>
+            <strong id="patrol-today-tasks">0</strong>
+            <small id="patrol-today-detail">0 轮 · 0 成功</small>
+        </article>
+        <article class="patrol-stat patrol-stat-accent">
+            <span>本轮任务</span>
+            <strong id="patrol-current-tasks">0</strong>
+            <small id="patrol-current-detail">0 成功 · 0 失败</small>
+        </article>
+        <article class="patrol-stat">
+            <span>历史任务</span>
+            <strong id="patrol-history-tasks">0</strong>
+            <small id="patrol-history-detail">0 轮 · 0 成功</small>
+        </article>
+    </div>
+
+    <div class="patrol-layout">
+        <form class="patrol-panel patrol-config" id="patrol-config-form">
+            <div class="patrol-panel-title">
+                <div><span>自动化策略</span><small>保存后重新计算下一轮时间</small></div>
+                <label class="patrol-switch"><input type="checkbox" id="patrol-enabled"><span></span></label>
+            </div>
+
+            <label class="form-label" for="patrol-interval">每轮间隔（分钟）</label>
+            <input class="form-control" id="patrol-interval" type="number" min="1" max="10080" value="60" required>
+
+            <span class="form-label patrol-label">测试项目</span>
+            <label class="patrol-check"><input type="checkbox" id="patrol-text-enabled" checked><span><b>文字测试</b><small>固定指令：只回复“盘巡正常”</small></span></label>
+            <label class="patrol-check"><input type="checkbox" id="patrol-image-enabled" checked><span><b>图文测试</b><small>每个任务生成一张随机 PNG 样本</small></span></label>
+
+            <label class="form-label" for="patrol-model">测试模型</label>
+            <select class="form-control" id="patrol-model">
+                <option value="gemini-flash">gemini-flash</option>
+                <option value="gemini-flash-lite">gemini-flash-lite</option>
+                <option value="gemini-pro">gemini-pro</option>
+                <option value="gemini-flash-thinking">gemini-flash-thinking</option>
+            </select>
+
+            <div class="patrol-divider"></div>
+            <div class="patrol-notify-row">
+                <div><b>飞书通知</b><small id="patrol-webhook-state">尚未配置 Webhook</small></div>
+                <label class="patrol-switch"><input type="checkbox" id="patrol-notify-enabled" checked><span></span></label>
+            </div>
+            <input class="form-control" id="patrol-webhook" type="url" placeholder="留空则保留当前 Webhook">
+            <input class="form-control" id="patrol-secret" type="password" autocomplete="new-password" placeholder="留空则保留当前校验密钥">
+
+            <button class="btn btn-primary patrol-save" type="submit"><i class="fas fa-check"></i> 保存盘巡设置</button>
+        </form>
+
+        <div class="patrol-panel patrol-history-panel">
+            <div class="patrol-panel-title">
+                <div><span>轮次记录</span><small>点击轮次查看账号级结果、耗时和响应摘要</small></div>
+                <button class="btn btn-sm btn-outline" type="button" id="patrol-refresh-btn"><i class="fas fa-rotate"></i></button>
+            </div>
+            <div id="patrol-history" class="patrol-history"><div class="patrol-empty">暂无盘巡记录</div></div>
+        </div>
+    </div>
+</section>

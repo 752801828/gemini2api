@@ -7,6 +7,7 @@ import { initThemeSwitcher } from './theme-switcher.js';
 import { initAuth, apiCall, logout } from './auth.js';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
+import { initPatrol, loadPatrol } from './patrol.js';
 import { initLogs } from './logs.js';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
@@ -80,6 +81,9 @@ async function loadSectionData(sectionId) {
                 break;
             case 'usage-stats':
                 await loadUsageStats();
+                break;
+            case 'patrol':
+                await loadPatrol();
                 break;
             case 'logs':
                 break;
@@ -1125,6 +1129,7 @@ async function initApp() {
     initEventListeners();
     initLogs();
     initUsageStats();
+    initPatrol();
     initSettings();
     initApiKeys();
     initGems();

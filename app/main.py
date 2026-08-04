@@ -28,9 +28,11 @@ from app.routers import settings as settings_router
 from app.routers import api_keys as api_keys_router
 from app.routers import model_mapping as model_mapping_router
 from app.routers import gems as gems_router
+from app.routers import patrol as patrol_router
 from app.core.api_key_store import ApiKeyPool
 from app.core.model_mapping import ModelMapping
 from app.core.gem_mapping import GemMapping
+from app.core.patrol import PatrolService
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
@@ -49,6 +51,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     logger.info(f"API Key: {mask_secret(settings.api_key)}")
     await account_pool.initialize()
+
+    app.state.patrol = PatrolService(account_pool)
+    await app.state.patrol.start()
 
     app.state.log_store = LogStore()
     app.state.api_key_pool = ApiKeyPool()
@@ -120,6 +125,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down...")
+    await app.state.patrol.stop()
     log_flush_task.cancel()
     try:
         await log_flush_task
@@ -304,6 +310,7 @@ app.include_router(settings_router.router, dependencies=_admin_deps)
 app.include_router(api_keys_router.router, dependencies=_admin_deps)
 app.include_router(model_mapping_router.router, dependencies=_admin_deps)
 app.include_router(gems_router.router, dependencies=_admin_deps)
+app.include_router(patrol_router.router, dependencies=_admin_deps)
 
 
 @app.get("/health")
