@@ -13,6 +13,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./api:/app/api
+      - ./accounts.json:/app/accounts.json
       - /etc/localtime:/etc/localtime:ro
       - /usr/share/zoneinfo/Asia/Shanghai:/usr/share/zoneinfo/Asia/Shanghai:ro
     tmpfs:

@@ -76,25 +76,26 @@ async function loadComponents(components) {
  */
 async function initializeComponents() {
     const basePath = 'components/';
+    const version = '?v=15';
 
     try {
         // 首先加载 header
-        await insertComponent(`${basePath}header.html`, '.container', 'afterbegin');
+        await insertComponent(`${basePath}header.html${version}`, '.container', 'afterbegin');
 
         // 然后加载 sidebar
-        await insertComponent(`${basePath}sidebar.html`, '#sidebar-container', 'replace');
+        await insertComponent(`${basePath}sidebar.html${version}`, '#sidebar-container', 'replace');
 
         // 最后加载所有 section 组件
         const sectionComponents = [
-            { path: `${basePath}section-dashboard.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-accounts.html`, container: '#content-container', position: 'beforeend' },
-                { path: `${basePath}section-playground.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-usage-stats.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-patrol.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-logs.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-api-keys.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-gems.html`, container: '#content-container', position: 'beforeend' },
-            { path: `${basePath}section-settings.html`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-dashboard.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-accounts.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-playground.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-usage-stats.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-patrol.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-logs.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-api-keys.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-gems.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-settings.html${version}`, container: '#content-container', position: 'beforeend' },
         ];
 
         await loadComponents(sectionComponents);
