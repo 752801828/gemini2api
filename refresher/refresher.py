@@ -12,6 +12,8 @@ import time
 import re
 import hashlib
 import threading
+import signal
+import subprocess
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import requests as http_requests
@@ -39,6 +41,9 @@ REFRESHER_PORT = int(os.environ.get("REFRESHER_PORT", "6080"))
 PROFILE_DIR = os.path.join(DATA_DIR, "browser_profiles")
 PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _profile_lock = threading.Lock()
+_manual_lock = threading.Lock()
+_manual_process = None
+_manual_account_id = None
 
 
 def load_accounts():
@@ -222,15 +227,41 @@ def refresh_all():
     print(f"\n  Summary: {len(active)}/{len(results)} accounts active")
 
 
-def refresh_profile(account):
-    """Use one persistent Chromium user-data directory per account."""
-    account_id = str(account.get("account_id", ""))
-    psid = str(account.get("psid", "")).strip()
-    psidts = str(account.get("psidts", "")).strip()
+def _validate_profile_id(account_id):
     if not PROFILE_ID_RE.fullmatch(account_id):
         raise ValueError("Invalid account_id")
-    if not psid:
-        raise ValueError("Missing __Secure-1PSID")
+
+
+def _manual_running_locked():
+    global _manual_process, _manual_account_id
+    if _manual_process and _manual_process.poll() is None:
+        return True
+    _manual_process = None
+    _manual_account_id = None
+    return False
+
+
+def _stop_manual_locked():
+    global _manual_process, _manual_account_id
+    if _manual_process and _manual_process.poll() is None:
+        try:
+            os.killpg(_manual_process.pid, signal.SIGTERM)
+            _manual_process.wait(timeout=10)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(_manual_process.pid, signal.SIGKILL)
+                _manual_process.wait(timeout=5)
+            except ProcessLookupError:
+                pass
+            except subprocess.TimeoutExpired:
+                pass
+    _manual_process = None
+    _manual_account_id = None
+
+
+def _extract_profile(account_id, psid="", psidts=""):
+    """Read a profile's Gemini cookies; optionally seed the two auth cookies first."""
+    _validate_profile_id(account_id)
 
     profile_dir = os.path.join(PROFILE_DIR, account_id)
     meta_path = os.path.join(profile_dir, "gemini2api-profile.json")
@@ -250,20 +281,20 @@ def refresh_profile(account):
             ],
         )
         try:
-            # Keep the persistent account profile, but seed only the two
-            # required auth cookies on every run. Stale Google challenge
-            # cookies can otherwise leave a healthy account on a login page.
-            context.clear_cookies()
-            cookies = [{
-                "name": "__Secure-1PSID", "value": psid, "domain": ".google.com",
-                "path": "/", "secure": True, "httpOnly": True, "sameSite": "None",
-            }]
-            if psidts:
-                cookies.append({
-                    "name": "__Secure-1PSIDTS", "value": psidts, "domain": ".google.com",
+            if psid:
+                # Automatic refresh starts from only the two required auth
+                # cookies. Manual capture leaves the user's logged-in profile intact.
+                context.clear_cookies()
+                cookies = [{
+                    "name": "__Secure-1PSID", "value": psid, "domain": ".google.com",
                     "path": "/", "secure": True, "httpOnly": True, "sameSite": "None",
-                })
-            context.add_cookies(cookies)
+                }]
+                if psidts:
+                    cookies.append({
+                        "name": "__Secure-1PSIDTS", "value": psidts, "domain": ".google.com",
+                        "path": "/", "secure": True, "httpOnly": True, "sameSite": "None",
+                    })
+                context.add_cookies(cookies)
 
             page = context.pages[0] if context.pages else context.new_page()
             body = ""
@@ -299,6 +330,73 @@ def refresh_profile(account):
             context.close()
 
 
+def refresh_profile(account):
+    """Use one persistent Chromium user-data directory per account."""
+    account_id = str(account.get("account_id", ""))
+    psid = str(account.get("psid", "")).strip()
+    psidts = str(account.get("psidts", "")).strip()
+    _validate_profile_id(account_id)
+    if not psid:
+        raise ValueError("Missing __Secure-1PSID")
+    with _manual_lock:
+        if _manual_running_locked():
+            raise RuntimeError("Manual browser session is active; finish it before automatic refresh")
+    return _extract_profile(account_id, psid, psidts)
+
+
+def open_manual_profile(account):
+    global _manual_process, _manual_account_id
+    account_id = str(account.get("account_id", ""))
+    _validate_profile_id(account_id)
+    profile_dir = os.path.join(PROFILE_DIR, account_id)
+    os.makedirs(profile_dir, exist_ok=True)
+    with _manual_lock, _profile_lock, sync_playwright() as p:
+        _stop_manual_locked()
+        env = {**os.environ, "DISPLAY": ":99"}
+        _manual_process = subprocess.Popen([
+            p.chromium.executable_path,
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-extensions",
+            "--no-first-run",
+            "--disable-default-apps",
+            "--window-size=1400,860",
+            f"--user-data-dir={profile_dir}",
+            "https://gemini.google.com/app?hl=zh-CN",
+        ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        _manual_account_id = account_id
+        time.sleep(1)
+        if _manual_process.poll() is not None:
+            _stop_manual_locked()
+            raise RuntimeError("Interactive Chromium failed to start")
+    return {"success": True, "account_id": account_id, "viewer_path": "/vnc.html?autoconnect=1&resize=scale"}
+
+
+def capture_manual_profile(account):
+    account_id = str(account.get("account_id", ""))
+    _validate_profile_id(account_id)
+    with _manual_lock:
+        if not _manual_running_locked() or _manual_account_id != account_id:
+            raise RuntimeError("This account has no active manual browser session")
+        _stop_manual_locked()
+    return _extract_profile(account_id)
+
+
+def close_manual_profile(account):
+    account_id = str(account.get("account_id", ""))
+    _validate_profile_id(account_id)
+    with _manual_lock:
+        if _manual_running_locked() and _manual_account_id == account_id:
+            _stop_manual_locked()
+    return {"success": True, "account_id": account_id}
+
+
+def manual_status():
+    with _manual_lock:
+        return {"active": _manual_running_locked(), "account_id": _manual_account_id}
+
+
 class RefreshHandler(BaseHTTPRequestHandler):
     def _json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -311,11 +409,24 @@ class RefreshHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._json(200, {"status": "ok", "service": "browser-refresher"})
+        elif self.path == "/manual/status":
+            expected = ADMIN_KEY
+            supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            if expected and supplied != expected:
+                self._json(401, {"error": "Unauthorized"})
+            else:
+                self._json(200, manual_status())
         else:
             self._json(404, {"error": "Not found"})
 
     def do_POST(self):
-        if self.path != "/refresh":
+        handlers = {
+            "/refresh": refresh_profile,
+            "/manual/open": open_manual_profile,
+            "/manual/capture": capture_manual_profile,
+            "/manual/close": close_manual_profile,
+        }
+        if self.path not in handlers:
             self._json(404, {"error": "Not found"})
             return
         expected = ADMIN_KEY
@@ -328,7 +439,7 @@ class RefreshHandler(BaseHTTPRequestHandler):
             if not 0 < size <= 1024 * 1024:
                 raise ValueError("Invalid request size")
             payload = json.loads(self.rfile.read(size))
-            self._json(200, refresh_profile(payload))
+            self._json(200, handlers[self.path](payload))
         except ValueError as e:
             self._json(400, {"error": str(e)[:300]})
         except Exception as e:

@@ -20,6 +20,7 @@
 .browser-profile-card.ready::before { background: var(--success-color); }
 .browser-profile-card.error::before { background: var(--danger-color); }
 .browser-profile-card.refreshing::before { background: var(--primary-color); }
+.browser-profile-card.manual::before { background: var(--warning-color); }
 .browser-profile-head { display: flex; justify-content: space-between; gap: .75rem; }
 .browser-profile-head > div { display: flex; flex-direction: column; }
 .browser-profile-head small, .browser-profile-detail { color: var(--text-tertiary); }
@@ -27,8 +28,9 @@
 .browser-profile-state.ready { color: var(--success-color); }
 .browser-profile-state.error { color: var(--danger-color); }
 .browser-profile-state.refreshing { color: var(--primary-color); }
+.browser-profile-state.manual { color: var(--warning-color); }
 .browser-profile-detail { min-height: 2.8em; margin: .9rem 0; padding: .7rem; border-radius: var(--radius-lg); background: var(--bg-secondary); font-size: .76rem; overflow-wrap: anywhere; }
-.browser-profile-actions { display: flex; gap: .6rem; }
+.browser-profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
 .browser-profile-actions .btn { flex: 1; }
 .browser-profile-empty { grid-column: 1 / -1; padding: 2rem; border: 1px dashed var(--border-color); border-radius: var(--radius-xl); text-align: center; color: var(--text-tertiary); }
 @media (max-width: 760px) { .browser-hero { flex-direction: column; } .browser-service-state { align-self: stretch; } .browser-flow { grid-template-columns: 1fr; } .browser-flow > i { display: none; } .browser-center-toolbar { align-items: flex-start; flex-direction: column; } }

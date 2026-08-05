@@ -170,18 +170,15 @@ class PatrolService:
         self._save_images()
         return True
 
-    def delete_task(self, round_id: str, task_index: int) -> bool:
-        round_data = next((item for item in self.history if item.get("id") == round_id), None)
-        tasks = round_data.get("tasks", []) if round_data else []
-        if not 0 <= task_index < len(tasks):
+    def delete_round(self, round_id: str) -> bool:
+        if self.current and self.current.get("id") == round_id and self._round_task and not self._round_task.done():
             return False
-        tasks.pop(task_index)
-        round_data["total"] = len(tasks)
-        round_data["success"] = sum(bool(task.get("success")) for task in tasks)
-        round_data["failed"] = round_data["total"] - round_data["success"]
-        round_data["status"] = "empty" if not tasks else "success" if not round_data["failed"] else "partial"
-        if self.current and self.current.get("id") == round_id and not (self._round_task and not self._round_task.done()):
-            self.current = copy.deepcopy(round_data)
+        round_data = next((item for item in self.history if item.get("id") == round_id), None)
+        if not round_data:
+            return False
+        self.history.remove(round_data)
+        if self.current and self.current.get("id") == round_id:
+            self.current = copy.deepcopy(self.history[-1]) if self.history else None
         self._save_history()
         return True
 
@@ -449,6 +446,13 @@ class PatrolService:
             except (KeyError, TypeError, ValueError):
                 continue
         latest = self.current or (self.history[-1] if self.history else None)
+
+        def type_stats(task_type: str) -> dict:
+            tasks = [task for item in self.history for task in item.get("tasks", []) if task.get("type") == task_type]
+            success = sum(bool(task.get("success")) for task in tasks)
+            total = len(tasks)
+            return {"tasks": total, "success": success, "failed": total - success, "rate": round(success * 100 / total, 1) if total else 0.0}
+
         return {
             "config": self.public_config(),
             "images": self.list_images(),
@@ -470,6 +474,10 @@ class PatrolService:
                     "rounds": len(self.history),
                     "tasks": sum(x.get("total", 0) for x in self.history),
                     "success": sum(x.get("success", 0) for x in self.history),
+                },
+                "types": {
+                    "text": type_stats("text"),
+                    "image": type_stats("image"),
                 },
             },
             "history": copy.deepcopy(list(reversed(self.history[-history_limit:]))),

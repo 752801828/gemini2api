@@ -28,7 +28,15 @@
 .browser-profile-chip { margin-left: 0.35rem; color: var(--text-secondary); font-weight: 600; }
 .browser-profile-chip.ready { color: var(--success-color); }
 .browser-profile-chip.refreshing { color: var(--primary-color); }
+.browser-profile-chip.manual { color: var(--warning-color); }
 .browser-profile-chip.error { color: var(--danger-color); }
+
+.account-credentials { display: grid; gap: .55rem; margin: .85rem 0; }
+.account-credentials > div { display: grid; grid-template-columns: 112px minmax(0, 1fr) 30px; align-items: center; gap: .5rem; padding: .55rem .65rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); }
+.account-credentials span { color: var(--text-tertiary); font-size: .68rem; font-weight: 750; }
+.account-credentials code { overflow-wrap: anywhere; word-break: break-all; color: var(--text-primary); font-size: .72rem; line-height: 1.45; }
+.acc-copy-ck { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); color: var(--text-secondary); cursor: pointer; }
+.acc-copy-ck:hover { border-color: var(--primary-color); color: var(--primary-color); }
 
 @media (max-width: 650px) { .browser-profile-banner { grid-template-columns: auto 1fr; } .browser-profile-local { grid-column: 1 / -1; justify-self: start; } }
 

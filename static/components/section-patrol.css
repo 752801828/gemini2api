@@ -8,7 +8,7 @@
 .patrol-livebar #patrol-next-run { margin-left: auto; }
 .patrol-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-tertiary); box-shadow: 0 0 0 5px color-mix(in srgb, var(--text-tertiary) 15%, transparent); }
 .patrol-livebar.is-running .patrol-live-dot { background: var(--primary-color); animation: patrol-pulse 1.4s infinite; }
-.patrol-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1rem; }
+.patrol-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem; }
 .patrol-stat { position: relative; overflow: hidden; min-height: 135px; padding: 1.2rem; border: 1px solid var(--border-color); border-radius: var(--radius-xl); background: var(--bg-primary); display: flex; flex-direction: column; }
 .patrol-stat::after { content: ''; position: absolute; width: 90px; height: 90px; right: -35px; bottom: -35px; border: 13px solid var(--primary-10); border-radius: 50%; }
 .patrol-stat span { color: var(--text-secondary); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; }
@@ -17,6 +17,7 @@
 .patrol-stat-accent { background: var(--patrol-ink); border-color: var(--patrol-ink); color: #fff; }
 .patrol-stat-accent span, .patrol-stat-accent small { color: #b7cec8; }
 .patrol-stat-accent strong { color: var(--patrol-lime); }
+.patrol-stat-rate strong { color: var(--primary-color); }
 .patrol-layout { display: grid; grid-template-columns: 1fr; gap: 1rem; }
 .patrol-panel { padding: 1.25rem; border: 1px solid var(--border-color); border-radius: var(--radius-xl); background: var(--bg-primary); box-shadow: var(--shadow-sm); }
 .patrol-library { margin-bottom: 1rem; }
@@ -82,7 +83,8 @@
 .patrol-pill.running { background: var(--primary-10); color: var(--primary-color); }
 .patrol-tasks { position: relative; padding: .9rem 1rem 1rem 1.6rem; border-top: 1px solid var(--border-color); background: color-mix(in srgb, var(--bg-secondary) 82%, var(--primary-10)); }
 .patrol-tasks::before { content: ''; position: absolute; top: 3.6rem; bottom: 1rem; left: .78rem; width: 2px; background: color-mix(in srgb, var(--primary-color) 28%, var(--border-color)); }
-.patrol-task-list-head { display: flex; align-items: baseline; gap: .6rem; margin: 0 0 .7rem -.55rem; color: var(--text-primary); }
+.patrol-task-list-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin: 0 0 .7rem -.55rem; color: var(--text-primary); }
+.patrol-task-list-head > div { display: flex; align-items: baseline; gap: .6rem; }
 .patrol-task-list-head span { font-size: .78rem; font-weight: 850; }
 .patrol-task-list-head small { color: var(--text-tertiary); }
 .patrol-task-detail { position: relative; margin: 0 0 .65rem; padding: 0; border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-primary); box-shadow: var(--shadow-sm); }
@@ -99,8 +101,8 @@
 .patrol-task-info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; padding: 0.9rem; border-top: 1px solid var(--border-color); background: var(--bg-primary); }
 .patrol-task-toolbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: .7rem; border-bottom: 1px solid var(--border-color); }
 .patrol-task-toolbar b { font-size: .8rem; }
-.patrol-task-delete { border: 0; background: transparent; color: var(--danger-color); font-size: .72rem; cursor: pointer; }
-.patrol-task-delete:hover { text-decoration: underline; }
+.patrol-round-delete { flex: none; padding: .4rem .65rem; border: 1px solid color-mix(in srgb, var(--danger-color) 35%, var(--border-color)); border-radius: var(--radius-md); background: var(--bg-primary); color: var(--danger-color); font-size: .72rem; cursor: pointer; }
+.patrol-round-delete:hover { border-color: var(--danger-color); background: var(--danger-10); }
 .patrol-task-field { min-width: 0; }
 .patrol-task-field.wide { grid-column: 1 / -1; }
 .patrol-task-field span { display: block; margin-bottom: 0.25rem; color: var(--text-tertiary); font-size: 0.68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
@@ -117,5 +119,6 @@
 .patrol-empty { display: grid; place-items: center; min-height: 200px; color: var(--text-tertiary); }
 @keyframes patrol-pulse { 50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--primary-color) 8%, transparent); } }
 @media (max-width: 1050px) { .patrol-config-body { grid-template-columns: 1fr 1fr; } .patrol-config-column:last-child { grid-column: 1 / -1; } }
-@media (max-width: 900px) { .patrol-stats { grid-template-columns: 1fr; } .patrol-heading { align-items: flex-start; flex-direction: column; } }
-@media (max-width: 650px) { .patrol-config-body { grid-template-columns: 1fr; } .patrol-config-column:last-child { grid-column: auto; } .patrol-task { grid-template-columns: auto 1fr auto; } .patrol-task > span:nth-of-type(2), .patrol-task > span:nth-of-type(3), .patrol-task > span:nth-of-type(4) { display: none; } .patrol-task-response { grid-column: 1 / -1; } .patrol-task-info { grid-template-columns: 1fr; } .patrol-task-field.wide, .patrol-task-toolbar { grid-column: auto; } .patrol-round summary { grid-template-columns: auto 1fr auto; } .patrol-round-score { display: none; } .patrol-tasks { padding-left: 1.35rem; } }
+@media (max-width: 1200px) { .patrol-stats { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px) { .patrol-stats { grid-template-columns: repeat(2, 1fr); } .patrol-heading { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 650px) { .patrol-stats { grid-template-columns: 1fr; } .patrol-config-body { grid-template-columns: 1fr; } .patrol-config-column:last-child { grid-column: auto; } .patrol-task { grid-template-columns: auto 1fr auto; } .patrol-task > span:nth-of-type(2), .patrol-task > span:nth-of-type(3), .patrol-task > span:nth-of-type(4) { display: none; } .patrol-task-response { grid-column: 1 / -1; } .patrol-task-info { grid-template-columns: 1fr; } .patrol-task-field.wide, .patrol-task-toolbar { grid-column: auto; } .patrol-round summary { grid-template-columns: auto 1fr auto; } .patrol-round-score { display: none; } .patrol-tasks { padding-left: 1.35rem; } .patrol-task-list-head { align-items: flex-start; flex-direction: column; } }

@@ -138,7 +138,9 @@ async def health_history():
 
 @router.get("/accounts")
 async def list_accounts():
-    return _masked_status()
+    # This endpoint is protected by the admin bearer token and powers the
+    # credential editor. Public dashboard status remains masked.
+    return account_pool.get_status(include_credentials=True)
 
 
 @router.post("/accounts")
@@ -211,6 +213,43 @@ async def refresh_account_from_browser(account_id: str):
     )
 
 
+def _browser_result(result: dict):
+    if result.get("success"):
+        return {"status": "ok", **result}
+    message = result.get("error", "Browser operation failed")
+    notification = result.get("notification")
+    if notification:
+        message += "（已发送飞书维护告警）" if notification.get("sent") else f"（飞书告警发送失败：{notification.get('error', '未知错误')}）"
+    return JSONResponse(
+        status_code=503,
+        content={"error": {"message": message, "type": "browser_operation_error"}},
+    )
+
+
+@router.post("/accounts/{account_id}/browser-open")
+async def open_account_browser(account_id: str):
+    try:
+        return _browser_result(await account_pool.open_account_browser(account_id))
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"error": {"message": str(e), "type": "not_found"}})
+
+
+@router.post("/accounts/{account_id}/browser-capture")
+async def capture_account_browser(account_id: str):
+    try:
+        return _browser_result(await account_pool.capture_account_browser(account_id))
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"error": {"message": str(e), "type": "not_found"}})
+
+
+@router.post("/accounts/{account_id}/browser-close")
+async def close_account_browser(account_id: str):
+    try:
+        return _browser_result(await account_pool.close_account_browser(account_id))
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"error": {"message": str(e), "type": "not_found"}})
+
+
 class UpdateCookiesRequest(BaseModel):
     psid: str
     psidts: str = ""
@@ -218,24 +257,13 @@ class UpdateCookiesRequest(BaseModel):
 
 @router.put("/accounts/{account_id}/cookies")
 async def update_account_cookies(account_id: str, req: UpdateCookiesRequest):
-    for account in account_pool.accounts:
-        if account.id == account_id:
-            if account.client:
-                result = await account.client.reload_cookies(psid=req.psid, psidts=req.psidts)
-                if result.get("success"):
-                    return {"status": "ok", "message": f"Account {account_id} cookies updated"}
-                return JSONResponse(
-                    status_code=503,
-                    content={"error": {"message": result.get("error", "Cookie reload failed"), "type": "reload_error"}},
-                )
-            return JSONResponse(
-                status_code=503,
-                content={"error": {"message": "Account client not initialized", "type": "client_error"}},
-            )
-    return JSONResponse(
-        status_code=404,
-        content={"error": {"message": f"Account {account_id} not found", "type": "not_found"}},
-    )
+    try:
+        await account_pool.update_account_cookies(account_id, req.psid, req.psidts)
+        return {"status": "ok", "message": f"Account {account_id} cookies updated"}
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"error": {"message": str(e), "type": "not_found"}})
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"error": {"message": str(e), "type": "reload_error"}})
 
 
 @router.get("/verify")

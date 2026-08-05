@@ -32,6 +32,12 @@ function render(data) {
     text('patrol-current-detail', `${stats.current.success} 成功 · ${stats.current.failed} 失败`);
     text('patrol-history-tasks', stats.history.tasks);
     text('patrol-history-detail', `${stats.history.rounds} 轮 · ${stats.history.success} 成功`);
+    const textStats = stats.types?.text || { tasks: 0, success: 0, rate: 0 };
+    const imageStats = stats.types?.image || { tasks: 0, success: 0, rate: 0 };
+    text('patrol-text-rate', `${textStats.rate}%`);
+    text('patrol-text-rate-detail', `${textStats.success} / ${textStats.tasks} 成功`);
+    text('patrol-image-rate', `${imageStats.rate}%`);
+    text('patrol-image-rate-detail', `${imageStats.success} / ${imageStats.tasks} 成功`);
 
     const livebar = document.getElementById('patrol-livebar');
     isRunning = running;
@@ -104,7 +110,7 @@ function renderRound(round, imageLookup, roundIndex) {
                 <i class="fas fa-chevron-down patrol-task-chevron"></i>
             </summary>
             <div class="patrol-task-info">
-                <div class="patrol-task-toolbar"><b>${typeLabel}任务详情</b><button class="patrol-task-delete" type="button" data-delete-task data-round-id="${escapeHtml(round.id)}" data-task-index="${taskIndex}"><i class="fas fa-trash"></i> 删除此任务记录</button></div>
+                <div class="patrol-task-toolbar"><b>${typeLabel}任务详情</b></div>
                 <div class="patrol-task-field"><span>任务</span><p>${typeLabel}测试 #${task.sequence || 1}</p></div>
                 <div class="patrol-task-field"><span>模型</span><p>${escapeHtml(task.model || '-')}</p></div>
                 <div class="patrol-task-field"><span>状态 / 耗时</span><p class="${task.success ? 'patrol-ok' : 'patrol-bad'}">${task.success ? '成功' : '失败'} · ${duration(task.duration_ms)}</p></div>
@@ -122,7 +128,7 @@ function renderRound(round, imageLookup, roundIndex) {
             <span class="patrol-round-score">${round.success || 0}/${round.total || 0}</span>
             <span class="patrol-pill ${escapeHtml(round.status)}">${statusMap[round.status] || escapeHtml(round.status)}</span>
         </summary>
-        <div class="patrol-tasks"><div class="patrol-task-list-head"><span>本轮任务</span><small>${round.total || 0} 条记录 · 点击任务行查看完整内容</small></div>${tasks || '<div class="patrol-empty">本轮没有任务</div>'}</div>
+        <div class="patrol-tasks"><div class="patrol-task-list-head"><div><span>本轮任务</span><small>${round.total || 0} 条记录 · 点击任务行查看完整内容</small></div><button class="patrol-round-delete" type="button" data-delete-round="${escapeHtml(round.id)}"><i class="fas fa-trash"></i> 删除整轮记录</button></div>${tasks || '<div class="patrol-empty">本轮没有任务</div>'}</div>
     </details>`;
 }
 
@@ -209,14 +215,14 @@ async function deleteImage(imageId) {
     }
 }
 
-async function deleteTask(roundId, taskIndex) {
-    if (!window.confirm('确定删除这条任务记录吗？删除后会重新计算本轮和历史统计。')) return;
+async function deleteRound(roundId) {
+    if (!window.confirm('确定删除这一整轮盘巡记录吗？本轮内的所有文字和图文任务都会删除，且无法恢复。')) return;
     try {
-        await apiCall('DELETE', `/admin/patrol/rounds/${encodeURIComponent(roundId)}/tasks/${taskIndex}`);
-        showToast('任务记录已删除', 'success');
+        await apiCall('DELETE', `/admin/patrol/rounds/${encodeURIComponent(roundId)}`);
+        showToast('整轮盘巡记录已删除', 'success');
         await loadPatrol();
     } catch (error) {
-        showToast(`删除任务失败：${error.message}`, 'error');
+        showToast(`删除轮次失败：${error.message}`, 'error');
     }
 }
 
@@ -245,8 +251,8 @@ export function initPatrol() {
         if (button) deleteImage(button.dataset.deleteImage);
     });
     document.getElementById('patrol-history')?.addEventListener('click', event => {
-        const button = event.target.closest('[data-delete-task]');
-        if (button) deleteTask(button.dataset.roundId, Number(button.dataset.taskIndex));
+        const button = event.target.closest('[data-delete-round]');
+        if (button) deleteRound(button.dataset.deleteRound);
     });
     clearInterval(timer);
     timer = setInterval(() => {

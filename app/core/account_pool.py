@@ -355,19 +355,13 @@ class AccountPool:
                 return True
         return False
 
-    async def _request_browser_profile(self, account: Account) -> dict:
-        psid, psidts = account.client.cookie_credentials
+    async def _request_browser_service(self, path: str, payload: dict) -> dict:
         key = settings.admin_api_key or settings.api_key
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         async with httpx.AsyncClient(timeout=settings.browser_refresh_timeout) as client:
             response = await client.post(
-                f"{settings.browser_refresher_url.rstrip('/')}/refresh",
-                json={
-                    "account_id": account.id,
-                    "label": account.label,
-                    "psid": psid,
-                    "psidts": psidts,
-                },
+                f"{settings.browser_refresher_url.rstrip('/')}{path}",
+                json=payload,
                 headers=headers,
             )
         if response.status_code != 200:
@@ -376,10 +370,44 @@ class AccountPool:
             except Exception:
                 message = response.text
             raise RuntimeError(str(message or f"Browser refresher HTTP {response.status_code}")[:300])
-        data = response.json()
+        return response.json()
+
+    async def _request_browser_profile(self, account: Account) -> dict:
+        psid, psidts = account.client.cookie_credentials
+        data = await self._request_browser_service("/refresh", {
+            "account_id": account.id,
+            "label": account.label,
+            "psid": psid,
+            "psidts": psidts,
+        })
         if not data.get("psid") or not data.get("psidts"):
             raise RuntimeError("Browser profile did not return login cookies")
         return data
+
+    async def _browser_failure(self, account: Account, error: str, was_healthy: bool) -> dict:
+        account.status = AccountStatus.ACTIVE if was_healthy else AccountStatus.EXPIRED
+        account.browser_profile_status = "error"
+        account.browser_profile_error = error[:300]
+        logger.warning("Account %s browser profile operation failed: %s", account.id, error[:300])
+        notification = None
+        if self._browser_failure_notifier:
+            try:
+                notification = await self._browser_failure_notifier(account, error[:300])
+            except Exception as notify_error:
+                logger.warning("Browser maintenance notification failed: %s", str(notify_error)[:300])
+        return {"success": False, "profile_id": account.id, "error": error[:300], "notification": notification}
+
+    async def _apply_account_cookies(self, account: Account, psid: str, psidts: str) -> dict:
+        result = await account.client.reload_cookies(psid, psidts)
+        if not result.get("success"):
+            raise RuntimeError(result.get("error", "Cookies were rejected"))
+        current_psid, current_psidts = account.client.cookie_credentials
+        account.psid = current_psid or psid
+        account.psidts = current_psidts or psidts
+        account.status = AccountStatus.ACTIVE
+        account.consecutive_failures = 0
+        self._save_to_file()
+        return result
 
     async def _refresh_account_browser(self, account: Account) -> dict:
         if not settings.browser_refresh_enabled:
@@ -395,16 +423,9 @@ class AccountPool:
             account.status = AccountStatus.REFRESHING
             try:
                 data = await self._request_browser_profile(account)
-                result = await account.client.reload_cookies(data["psid"], data["psidts"])
-                if not result.get("success"):
-                    raise RuntimeError(result.get("error", "Refreshed cookies were rejected"))
-                account.psid = data["psid"]
-                account.psidts = data["psidts"]
-                account.status = AccountStatus.ACTIVE
-                account.consecutive_failures = 0
+                await self._apply_account_cookies(account, data["psid"], data["psidts"])
                 account.browser_profile_status = "ready"
                 account.browser_profile_updated_at = data.get("updated_at") or datetime.now(timezone.utc).isoformat()
-                self._save_to_file()
                 logger.info("Account %s refreshed from built-in browser profile", account.id)
                 return {
                     "success": True,
@@ -412,24 +433,67 @@ class AccountPool:
                     "updated_at": account.browser_profile_updated_at,
                 }
             except Exception as e:
-                error = str(e)[:300]
-                account.status = AccountStatus.ACTIVE if was_healthy else AccountStatus.EXPIRED
-                account.browser_profile_status = "error"
-                account.browser_profile_error = error
-                logger.warning("Account %s browser profile refresh failed: %s", account.id, error)
-                notification = None
-                if self._browser_failure_notifier:
-                    try:
-                        notification = await self._browser_failure_notifier(account, error)
-                    except Exception as notify_error:
-                        logger.warning("Browser maintenance notification failed: %s", str(notify_error)[:300])
-                return {"success": False, "profile_id": account.id, "error": error, "notification": notification}
+                return await self._browser_failure(account, str(e), was_healthy)
 
     async def refresh_account_browser(self, account_id: str) -> dict:
         account = self._get_account(account_id)
         if account is None:
             raise ValueError(f"Account {account_id} not found")
         return await self._refresh_account_browser(account)
+
+    async def open_account_browser(self, account_id: str) -> dict:
+        account = self._get_account(account_id)
+        if account is None:
+            raise ValueError(f"Account {account_id} not found")
+        was_healthy = bool(account.client and account.client.is_healthy)
+        try:
+            data = await self._request_browser_service("/manual/open", {
+                "account_id": account.id,
+                "label": account.label,
+            })
+            for item in self._accounts:
+                if item.browser_profile_status == "manual":
+                    item.browser_profile_status = "ready" if item.browser_profile_updated_at else "standby"
+            account.browser_profile_status = "manual"
+            account.browser_profile_error = ""
+            return {"success": True, "profile_id": account.id, "viewer_path": data.get("viewer_path", "/vnc.html?autoconnect=1&resize=scale")}
+        except Exception as e:
+            return await self._browser_failure(account, str(e), was_healthy)
+
+    async def capture_account_browser(self, account_id: str) -> dict:
+        account = self._get_account(account_id)
+        if account is None:
+            raise ValueError(f"Account {account_id} not found")
+        if not account.client:
+            return {"success": False, "error": "Account client not initialized"}
+        was_healthy = account.client.is_healthy
+        try:
+            data = await self._request_browser_service("/manual/capture", {"account_id": account.id})
+            if not data.get("psid") or not data.get("psidts"):
+                raise RuntimeError("Manual browser did not contain Gemini login cookies")
+            await self._apply_account_cookies(account, data["psid"], data["psidts"])
+            account.browser_profile_status = "ready"
+            account.browser_profile_error = ""
+            account.browser_profile_updated_at = data.get("updated_at") or datetime.now(timezone.utc).isoformat()
+            return {"success": True, "profile_id": account.id, "updated_at": account.browser_profile_updated_at}
+        except Exception as e:
+            return await self._browser_failure(account, str(e), was_healthy)
+
+    async def close_account_browser(self, account_id: str) -> dict:
+        account = self._get_account(account_id)
+        if account is None:
+            raise ValueError(f"Account {account_id} not found")
+        await self._request_browser_service("/manual/close", {"account_id": account.id})
+        account.browser_profile_status = "ready" if account.browser_profile_updated_at else "standby"
+        return {"success": True, "profile_id": account.id}
+
+    async def update_account_cookies(self, account_id: str, psid: str, psidts: str) -> dict:
+        account = self._get_account(account_id)
+        if account is None:
+            raise ValueError(f"Account {account_id} not found")
+        if not account.client:
+            raise RuntimeError("Account client not initialized")
+        return await self._apply_account_cookies(account, psid, psidts)
 
     def set_browser_failure_notifier(self, notifier) -> None:
         self._browser_failure_notifier = notifier
@@ -536,10 +600,10 @@ class AccountPool:
         except RuntimeError:
             pass
 
-    def get_status(self) -> dict:
+    def get_status(self, include_credentials: bool = False) -> dict:
         accounts_info = []
         for a in self._accounts:
-            accounts_info.append({
+            info = {
                 "id": a.id,
                 "label": a.label,
                 "psid": a.psid,
@@ -555,7 +619,12 @@ class AccountPool:
                 "browser_profile_status": a.browser_profile_status,
                 "browser_profile_updated_at": a.browser_profile_updated_at,
                 "browser_profile_error": a.browser_profile_error,
-            })
+            }
+            if include_credentials:
+                current_psid, current_psidts = a.client.cookie_credentials if a.client else (a.psid, a.psidts)
+                info["psid"] = current_psid
+                info["psidts"] = current_psidts
+            accounts_info.append(info)
         return {
             "total": self.total_count,
             "active": self.active_count,

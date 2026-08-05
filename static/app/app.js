@@ -7,7 +7,7 @@ import { initThemeSwitcher } from './theme-switcher.js';
 import { initAuth, apiCall, logout } from './auth.js';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
-import { initPatrol, loadPatrol } from './patrol.js?v=6';
+import { initPatrol, loadPatrol } from './patrol.js?v=7';
 import { initLogs } from './logs.js';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
@@ -313,7 +313,7 @@ function updatePlaygroundModels(modelsSet) {
 // ============================================================================
 
 function browserProfileMeta(account) {
-    const labels = { standby: '待首次使用', refreshing: '正在获取', ready: '已就绪', error: '需要维护' };
+    const labels = { standby: '待首次使用', refreshing: '正在获取', manual: '等待人工登录', ready: '已就绪', error: '需要维护' };
     const status = account.browser_profile_status || 'standby';
     const detail = account.browser_profile_error || (account.browser_profile_updated_at
         ? `最近更新 ${new Date(account.browser_profile_updated_at).toLocaleString('zh-CN', { hour12: false })}`
@@ -333,13 +333,24 @@ function renderBrowserCenter(accounts) {
             </div>
             <div class="browser-profile-detail">${escapeHtml(profile.detail)}</div>
             <div class="browser-profile-actions">
-                <button class="btn btn-sm btn-primary browser-refresh-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-rotate"></i> 立即获取 CK</button>
-                <a class="btn btn-sm btn-outline" href="#accounts"><i class="fas fa-user-gear"></i> 账号管理</a>
+                <button class="btn btn-sm btn-primary browser-open-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-arrow-up-right-from-square"></i> 打开浏览器</button>
+                <button class="btn btn-sm btn-success browser-capture-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-cookie-bite"></i> 登录完成，同步 CK</button>
+                <button class="btn btn-sm btn-outline browser-refresh-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-rotate"></i> 自动获取</button>
+                <button class="btn btn-sm btn-outline browser-close-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-xmark"></i> 关闭</button>
             </div>
         </article>`;
     }).join('') : '<div class="browser-profile-empty">暂无账号，请先到账号管理添加账号。</div>';
+    container.querySelectorAll('.browser-open-btn').forEach(btn => {
+        btn.addEventListener('click', () => openManualBrowser(btn.dataset.accountId));
+    });
+    container.querySelectorAll('.browser-capture-btn').forEach(btn => {
+        btn.addEventListener('click', () => captureManualBrowser(btn.dataset.accountId, btn));
+    });
     container.querySelectorAll('.browser-refresh-btn').forEach(btn => {
         btn.addEventListener('click', () => refreshAccountBrowser(btn.dataset.accountId, btn));
+    });
+    container.querySelectorAll('.browser-close-btn').forEach(btn => {
+        btn.addEventListener('click', () => closeManualBrowser(btn.dataset.accountId));
     });
 }
 
@@ -381,9 +392,9 @@ async function loadAccounts() {
                     </div>
                     ${getStatusBadge(account.status)}
                 </div>
-                <div class="account-detail">
-                    <span class="label">PSID</span>
-                    <span class="value">${escapeHtml(maskString(account.psid || '', 12))}</span>
+                <div class="account-credentials">
+                    <div><span>__Secure-1PSID</span><code>${escapeHtml(account.psid || '未设置')}</code><button class="acc-copy-ck" type="button" data-account-id="${idEsc}" data-kind="psid" title="复制 PSID"><i class="fas fa-copy"></i></button></div>
+                    <div><span>__Secure-1PSIDTS</span><code>${escapeHtml(account.psidts || '未设置')}</code><button class="acc-copy-ck" type="button" data-account-id="${idEsc}" data-kind="psidts" title="复制 PSIDTS"><i class="fas fa-copy"></i></button></div>
                 </div>
                 <div class="account-detail">
                     <span class="label">${t('accounts.requests')}</span>
@@ -410,7 +421,7 @@ async function loadAccounts() {
                         <i class="fas fa-cookie-bite"></i> ${t('accounts.updateCookie')}
                     </button>
                     <button class="btn btn-sm btn-outline acc-browser-btn" data-account-id="${idEsc}">
-                        <i class="fas fa-earth-asia"></i> 浏览器续期
+                        <i class="fas fa-earth-asia"></i> 人工登录
                     </button>
                     <button class="btn btn-sm btn-danger acc-remove-btn" data-account-id="${idEsc}">
                         <i class="fas fa-trash"></i> ${t('accounts.delete')}
@@ -425,10 +436,21 @@ async function loadAccounts() {
             btn.addEventListener('click', () => checkAccount(btn.dataset.accountId));
         });
         container.querySelectorAll('.acc-cookie-btn').forEach(btn => {
-            btn.addEventListener('click', () => openUpdateCookieModal(btn.dataset.accountId, btn.dataset.accountLabel || ''));
+            btn.addEventListener('click', () => {
+                const account = accounts.find(item => item.id === btn.dataset.accountId);
+                openUpdateCookieModal(btn.dataset.accountId, btn.dataset.accountLabel || '', account?.psid || '', account?.psidts || '');
+            });
+        });
+        container.querySelectorAll('.acc-copy-ck').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const account = accounts.find(item => item.id === btn.dataset.accountId);
+                const value = account?.[btn.dataset.kind] || '';
+                const ok = value && await copyToClipboard(value);
+                showToast(ok ? 'CK 已复制' : '复制失败', ok ? 'success' : 'error');
+            });
         });
         container.querySelectorAll('.acc-browser-btn').forEach(btn => {
-            btn.addEventListener('click', () => refreshAccountBrowser(btn.dataset.accountId, btn));
+            btn.addEventListener('click', () => openManualBrowser(btn.dataset.accountId));
         });
         container.querySelectorAll('.acc-remove-btn').forEach(btn => {
             btn.addEventListener('click', () => removeAccount(btn.dataset.accountId));
@@ -465,6 +487,52 @@ async function refreshAccountBrowser(accountId, button = null) {
     } catch (error) {
         showToast(`浏览器续期失败：${error.message}`, 'error');
         await loadAccounts();
+    }
+}
+
+async function openManualBrowser(accountId) {
+    const viewer = window.open('about:blank', 'gemini2api-manual-browser');
+    if (!viewer) {
+        showToast('浏览器拦截了新窗口，请允许本站弹出窗口后重试', 'warning');
+        return;
+    }
+    viewer.document.title = '正在启动账号浏览器…';
+    try {
+        const result = await apiCall('POST', `/admin/accounts/${accountId}/browser-open`);
+        const viewerUrl = `${window.location.protocol}//${window.location.hostname}:6081${result.viewer_path || '/vnc.html?autoconnect=1&resize=scale'}`;
+        viewer.location.replace(viewerUrl);
+        showToast('浏览器已打开；登录 Gemini 后回到浏览器中心同步 CK', 'info');
+        await loadAccounts();
+    } catch (error) {
+        viewer.close();
+        showToast(`打开浏览器失败：${error.message}`, 'error');
+        await loadAccounts();
+    }
+}
+
+async function captureManualBrowser(accountId, button = null) {
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在同步';
+    }
+    try {
+        await apiCall('POST', `/admin/accounts/${accountId}/browser-capture`);
+        showToast('登录状态已验证，CK 已回写并保存', 'success');
+        await loadAccounts();
+        await loadDashboard();
+    } catch (error) {
+        showToast(`同步 CK 失败：${error.message}`, 'error');
+        await loadAccounts();
+    }
+}
+
+async function closeManualBrowser(accountId) {
+    try {
+        await apiCall('POST', `/admin/accounts/${accountId}/browser-close`);
+        showToast('人工浏览器已关闭', 'success');
+        await loadAccounts();
+    } catch (error) {
+        showToast(`关闭浏览器失败：${error.message}`, 'error');
     }
 }
 
@@ -531,11 +599,15 @@ async function submitAddAccount() {
 
 let updateCookieAccountId = null;
 
-function openUpdateCookieModal(accountId, label) {
+function openUpdateCookieModal(accountId, label, psid = '', psidts = '') {
     updateCookieAccountId = accountId;
     const modal = document.getElementById('updateCookieModal');
     const title = document.getElementById('updateCookieTitle');
     if (title) title.textContent = `更新 Cookie - ${label || accountId}`;
+    const psidInput = document.getElementById('update-psid');
+    const psidtsInput = document.getElementById('update-psidts');
+    if (psidInput) psidInput.value = psid;
+    if (psidtsInput) psidtsInput.value = psidts;
     if (modal) modal.classList.add('active');
 }
 

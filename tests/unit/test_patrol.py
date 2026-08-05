@@ -65,11 +65,14 @@ def test_round_records_text_and_random_image_results(tmp_path):
     assert len(overview["history"][0]["tasks"][2]["response_preview"]) == 300
     assert len(overview["history"][0]["tasks"][2]["image_sample_ids"]) == len(overview["history"][0]["tasks"][2]["image_samples"])
     assert all(call["model"] in {"gemini-flash", "gemini-pro"} for call in pool.calls)
+    assert overview["stats"]["types"]["text"] == {"tasks": 2, "success": 2, "failed": 0, "rate": 100.0}
+    assert overview["stats"]["types"]["image"] == {"tasks": 3, "success": 3, "failed": 0, "rate": 100.0}
 
-    assert service.delete_task("round-1", 1) is True
+    assert service.delete_round("round-1") is True
     updated = service.overview()
-    assert updated["stats"]["history"] == {"rounds": 1, "tasks": 4, "success": 4}
-    assert service.delete_task("round-1", 99) is False
+    assert updated["stats"]["history"] == {"rounds": 0, "tasks": 0, "success": 0}
+    assert updated["stats"]["types"]["text"]["rate"] == 0.0
+    assert service.delete_round("round-1") is False
 
 
 def test_browser_failure_notification_reuses_patrol_webhook(tmp_path):

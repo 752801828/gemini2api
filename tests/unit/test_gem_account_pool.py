@@ -214,6 +214,38 @@ def test_browser_profile_failure_notifies_maintenance():
     assert account.status == AccountStatus.ACTIVE
 
 
+def test_manual_browser_capture_updates_exact_credentials_and_status():
+    class CookieClient:
+        is_healthy = True
+        cookie_credentials = ("old-psid", "old-psidts")
+
+        async def reload_cookies(self, psid, psidts):
+            self.cookie_credentials = (psid, psidts)
+            return {"success": True}
+
+    pool = AccountPool()
+    account = Account("account-0", "old-psid", "old-psidts", client=CookieClient())
+    pool._accounts = [account]
+    pool._request_browser_service = AsyncMock(side_effect=[
+        {"viewer_path": "/vnc.html?autoconnect=1"},
+        {"psid": "manual-psid", "psidts": "manual-psidts", "updated_at": "2026-08-05T01:00:00+00:00"},
+    ])
+    pool._save_to_file = lambda: None
+
+    async def run_flow():
+        opened = await pool.open_account_browser("account-0")
+        captured = await pool.capture_account_browser("account-0")
+        return opened, captured, pool.get_status(include_credentials=True)["accounts"][0]
+
+    opened, captured, credentials = asyncio.run(run_flow())
+
+    assert opened["success"] is True
+    assert captured["success"] is True
+    assert account.browser_profile_status == "ready"
+    assert credentials["psid"] == "manual-psid"
+    assert credentials["psidts"] == "manual-psidts"
+
+
 def test_browser_profile_ready_state_survives_restart(tmp_path, monkeypatch):
     class HealthyClient:
         is_healthy = True

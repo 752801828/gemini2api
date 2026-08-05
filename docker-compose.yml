@@ -43,8 +43,12 @@ services:
       - TZ=Asia/Shanghai
       - REFRESHER_MODE=server
       - REFRESHER_PORT=6080
+    command: ["/app/start.sh"]
     expose:
       - "6080"
+    ports:
+      # 仅本机可访问的人工登录浏览器（noVNC），不会暴露到局域网。
+      - "127.0.0.1:6081:6081"
     volumes:
       # 与主服务共享 ./data，浏览器 Profile 持久化且按账号隔离。
       - ./data:/app/data
