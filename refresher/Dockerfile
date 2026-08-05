@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir playwright==1.44.0 requests==2.32.3
 
 COPY refresher.py .
 COPY start.sh .
+COPY session_browser.html /usr/share/novnc/session_browser.html
 
 # 非 root 运行：playwright 基础镜像自带 pwuser，用它降权（缩小被 Chromium 渗透后的影响面）。
 # /app 归属 pwuser，挂载进来的 /app/data 在运行时由 compose 处理写权限。

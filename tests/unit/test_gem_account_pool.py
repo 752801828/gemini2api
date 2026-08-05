@@ -1,5 +1,6 @@
 import asyncio
 import types
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, patch
 from app.core.account_pool import Account, AccountPool, AccountStatus
@@ -270,3 +271,40 @@ def test_browser_profile_ready_state_survives_restart(tmp_path, monkeypatch):
 
     assert account.browser_profile_status == "ready"
     assert account.browser_profile_updated_at == "2026-08-05T00:00:00+00:00"
+
+
+def test_flow_style_browser_page_has_interactive_controls():
+    html = (
+        Path(__file__).resolve().parents[2] / "refresher" / "session_browser.html"
+    ).read_text(encoding="utf-8")
+
+    for marker in (
+        'id="complete"',
+        'id="capsLock"',
+        'id="paste"',
+        'id="copyRemote"',
+        'id="reconnect"',
+        'id="fullscreen"',
+        "new RFB(screen, websocketUrl",
+        "rfb.clipboardPasteFrom(text)",
+        "rfb.addEventListener('clipboard', handleRemoteClipboard)",
+        "window.opener.postMessage",
+    ):
+        assert marker in html
+
+
+def test_refresher_startup_cleans_stale_x_display():
+    script = (
+        Path(__file__).resolve().parents[2] / "refresher" / "start.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99" in script
+
+
+def test_refresher_clears_only_chromium_singleton_markers():
+    source = (
+        Path(__file__).resolve().parents[2] / "refresher" / "refresher.py"
+    ).read_text(encoding="utf-8")
+
+    assert '("SingletonLock", "SingletonCookie", "SingletonSocket")' in source
+    assert "_clear_stale_chromium_locks(profile_dir)" in source

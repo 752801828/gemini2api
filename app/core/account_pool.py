@@ -456,7 +456,11 @@ class AccountPool:
                     item.browser_profile_status = "ready" if item.browser_profile_updated_at else "standby"
             account.browser_profile_status = "manual"
             account.browser_profile_error = ""
-            return {"success": True, "profile_id": account.id, "viewer_path": data.get("viewer_path", "/vnc.html?autoconnect=1&resize=scale")}
+            return {
+                "success": True,
+                "profile_id": account.id,
+                "viewer_path": data.get("viewer_path", f"/session_browser.html?account_id={account.id}"),
+            }
         except Exception as e:
             return await self._browser_failure(account, str(e), was_healthy)
 

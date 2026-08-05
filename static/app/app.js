@@ -499,9 +499,11 @@ async function openManualBrowser(accountId) {
     viewer.document.title = '正在启动账号浏览器…';
     try {
         const result = await apiCall('POST', `/admin/accounts/${accountId}/browser-open`);
-        const viewerUrl = `${window.location.protocol}//${window.location.hostname}:6081${result.viewer_path || '/vnc.html?autoconnect=1&resize=scale'}`;
-        viewer.location.replace(viewerUrl);
-        showToast('浏览器已打开；登录 Gemini 后回到浏览器中心同步 CK', 'info');
+        const fallbackPath = `/session_browser.html?account_id=${encodeURIComponent(accountId)}`;
+        const viewerUrl = `${window.location.protocol}//${window.location.hostname}:6081${result.viewer_path || fallbackPath}`;
+        const separator = viewerUrl.includes('?') ? '&' : '?';
+        viewer.location.replace(`${viewerUrl}${separator}parent_origin=${encodeURIComponent(window.location.origin)}`);
+        showToast('浏览器已打开；登录 Gemini 后点击顶部 ✓ 同步 CK', 'info');
         await loadAccounts();
     } catch (error) {
         viewer.close();
@@ -535,6 +537,39 @@ async function closeManualBrowser(accountId) {
         showToast(`关闭浏览器失败：${error.message}`, 'error');
     }
 }
+
+function replyToBrowserSession(event, action, success, error = '') {
+    event.source?.postMessage({
+        source: 'gemini2api-admin',
+        action,
+        success,
+        error,
+    }, event.origin);
+}
+
+window.addEventListener('message', async (event) => {
+    const browserOrigin = `${window.location.protocol}//${window.location.hostname}:6081`;
+    const data = event.data;
+    if (event.origin !== browserOrigin || data?.source !== 'gemini2api-browser') return;
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(data.accountId || '')) return;
+    if (data.action !== 'capture' && data.action !== 'close') return;
+
+    try {
+        await apiCall('POST', `/admin/accounts/${data.accountId}/browser-${data.action}`);
+        replyToBrowserSession(event, data.action, true);
+        if (data.action === 'capture') {
+            showToast('登录状态已验证，CK 已回写并保存', 'success');
+            await Promise.all([loadAccounts(), loadDashboard()]);
+        } else {
+            showToast('人工浏览器已关闭', 'success');
+            await loadAccounts();
+        }
+    } catch (error) {
+        replyToBrowserSession(event, data.action, false, error.message || '操作失败');
+        showToast(`${data.action === 'capture' ? '同步 CK' : '关闭浏览器'}失败：${error.message}`, 'error');
+        await loadAccounts();
+    }
+});
 
 async function removeAccount(accountId) {
     const confirmed = await showConfirm({

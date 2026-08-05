@@ -344,6 +344,15 @@ def refresh_profile(account):
     return _extract_profile(account_id, psid, psidts)
 
 
+def _clear_stale_chromium_locks(profile_dir):
+    """Remove only Chromium's per-profile singleton markers after its process is stopped."""
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        try:
+            os.unlink(os.path.join(profile_dir, name))
+        except FileNotFoundError:
+            pass
+
+
 def open_manual_profile(account):
     global _manual_process, _manual_account_id
     account_id = str(account.get("account_id", ""))
@@ -352,6 +361,7 @@ def open_manual_profile(account):
     os.makedirs(profile_dir, exist_ok=True)
     with _manual_lock, _profile_lock, sync_playwright() as p:
         _stop_manual_locked()
+        _clear_stale_chromium_locks(profile_dir)
         env = {**os.environ, "DISPLAY": ":99"}
         _manual_process = subprocess.Popen([
             p.chromium.executable_path,
@@ -370,7 +380,7 @@ def open_manual_profile(account):
         if _manual_process.poll() is not None:
             _stop_manual_locked()
             raise RuntimeError("Interactive Chromium failed to start")
-    return {"success": True, "account_id": account_id, "viewer_path": "/vnc.html?autoconnect=1&resize=scale"}
+    return {"success": True, "account_id": account_id, "viewer_path": f"/session_browser.html?account_id={account_id}"}
 
 
 def capture_manual_profile(account):
