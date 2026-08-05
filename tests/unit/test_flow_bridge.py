@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.config import settings
-from app.core.flow_bridge import FlowBridgeService
+from app.core.flow_bridge import FlowBridgeError, FlowBridgeService
 from app.core.gemini_client import GeminiWebClient
 
 
@@ -68,3 +68,28 @@ async def test_empty_gemini_response_retries_before_returning(monkeypatch):
 
     assert result["text"] == "Service is running normally"
     assert client._send_request.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_flow_refresh_failure_notifies_maintenance():
+    pool = FakeAccountPool()
+    service = FlowBridgeService(
+        pool,
+        enabled=True,
+        base_url="http://flow.example",
+        secret="bridge-secret",
+        timeout=5,
+    )
+    notifier = AsyncMock(return_value={"sent": True})
+    service.set_failure_notifier(notifier)
+    service._request = AsyncMock(side_effect=FlowBridgeError("profile_not_ready", "login required", 409))
+    try:
+        with pytest.raises(FlowBridgeError):
+            await service.refresh_token(9)
+    finally:
+        await service.aclose()
+
+    notifier.assert_awaited_once()
+    account, error = notifier.await_args.args
+    assert account.id == "flow-9"
+    assert error == "login required"

@@ -185,11 +185,7 @@ class AccountPool:
 
         async def refresh_profile() -> bool:
             if account.source == "flow" and self._flow_cookie_refresher:
-                try:
-                    return bool((await self._flow_cookie_refresher(account)).get("success"))
-                except Exception as error:
-                    await self._browser_failure(account, str(error), account.client.is_healthy)
-                    raise
+                return bool((await self._flow_cookie_refresher(account)).get("success"))
             return bool((await self._refresh_account_browser(account)).get("success"))
 
         client = GeminiWebClient(

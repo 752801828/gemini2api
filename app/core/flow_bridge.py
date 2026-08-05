@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from types import SimpleNamespace
 from typing import Optional
 from uuid import uuid4
 
@@ -33,6 +34,7 @@ class FlowBridgeService:
         self.secret = (settings.flow_bridge_secret if secret is None else secret).strip()
         self.timeout = max(5.0, settings.flow_bridge_timeout if timeout is None else timeout)
         self._locks: dict[int, asyncio.Lock] = {}
+        self._failure_notifier = None
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout, connect=15.0),
             trust_env=False,
@@ -49,6 +51,21 @@ class FlowBridgeService:
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+    def set_failure_notifier(self, notifier) -> None:
+        self._failure_notifier = notifier
+
+    async def _notify_failure(self, token_id: int, error: Exception) -> None:
+        if not self._failure_notifier:
+            return
+        account = self.account_pool.get_flow_account(token_id) or SimpleNamespace(
+            id=f"flow-{token_id}",
+            label=f"Flow #{token_id}",
+        )
+        try:
+            await self._failure_notifier(account, str(error)[:300])
+        except Exception:
+            pass
 
     async def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         if not self.configured:
@@ -90,18 +107,22 @@ class FlowBridgeService:
             raise FlowBridgeError("invalid_mapping", "Invalid Flow token id", 422)
         lock = self._locks.setdefault(token_id, asyncio.Lock())
         async with lock:
-            request_id = uuid4().hex
-            result = await self._request(
-                "POST",
-                f"/api/gemini-bridge/accounts/{token_id}/refresh",
-                {"request_id": request_id},
-            )
-            if result.get("request_id") and result.get("request_id") != request_id:
-                raise FlowBridgeError("request_mismatch", "Flow returned mismatched refresh metadata", 409)
-            account = self.account_pool.get_flow_account(token_id)
-            if account is None:
-                raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
-            return {"success": True, "account_id": account.id, "flow_token_id": token_id}
+            try:
+                request_id = uuid4().hex
+                result = await self._request(
+                    "POST",
+                    f"/api/gemini-bridge/accounts/{token_id}/refresh",
+                    {"request_id": request_id},
+                )
+                if result.get("request_id") and result.get("request_id") != request_id:
+                    raise FlowBridgeError("request_mismatch", "Flow returned mismatched refresh metadata", 409)
+                account = self.account_pool.get_flow_account(token_id)
+                if account is None:
+                    raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
+                return {"success": True, "account_id": account.id, "flow_token_id": token_id}
+            except Exception as error:
+                await self._notify_failure(token_id, error)
+                raise
 
     async def refresh_account(self, account) -> dict:
         if account.source != "flow" or not account.flow_token_id:

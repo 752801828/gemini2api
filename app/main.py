@@ -56,6 +56,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"API Key: {mask_secret(settings.api_key)}")
     app.state.patrol = PatrolService(account_pool)
     account_pool.set_browser_failure_notifier(app.state.patrol.notify_browser_failure)
+    flow_bridge_service.set_failure_notifier(app.state.patrol.notify_browser_failure)
     account_pool.set_flow_cookie_refresher(flow_bridge_service.refresh_account)
     await account_pool.initialize()
     await app.state.patrol.start()
