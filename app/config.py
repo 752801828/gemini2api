@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     browser_refresh_enabled: bool = True
     browser_refresher_url: str = "http://refresher:6080"
     browser_refresh_timeout: float = 120.0
+    flow_bridge_enabled: bool = False
+    flow_bridge_base_url: str = "http://host.docker.internal:38000"
+    flow_bridge_secret: str = ""
+    flow_bridge_timeout: float = 120.0
     accounts_file: str = "accounts.json"
     rotation_strategy: str = "round-robin"
     max_concurrent_per_account: int = 8

@@ -18,7 +18,11 @@
 
     <div class="browser-center-toolbar">
         <div><b>账号 Profile</b><small>同一时间只打开一个人工浏览器。会话页提供剪贴板、重连、缩放和全屏；登录完成请点击顶部 ✓。</small></div>
-        <a class="btn btn-sm btn-outline" href="#patrol"><i class="fas fa-bell"></i> 飞书告警设置</a>
+        <span class="browser-toolbar-actions">
+            <em id="flowBridgeState" class="browser-flow-state">Flow 未读取</em>
+            <button id="syncFlowBridgeBtn" class="btn btn-sm btn-primary" type="button"><i class="fas fa-arrows-rotate"></i> 从 Flow 同步账号/CK</button>
+            <a class="btn btn-sm btn-outline" href="#patrol"><i class="fas fa-bell"></i> 飞书告警设置</a>
+        </span>
     </div>
     <div id="browserProfilesList" class="browser-profiles-grid"><div class="browser-profile-empty">正在加载浏览器 Profile…</div></div>
 </section>

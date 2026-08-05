@@ -1041,7 +1041,10 @@ class GeminiWebClient:
         max_5xx = max(0, settings.same_account_5xx_retries)
         for attempt in range(settings.max_retries):
             try:
-                return await self._send_request(prompt, model, conversation_id, attachments, gem_id)
+                result = await self._send_request(prompt, model, conversation_id, attachments, gem_id)
+                if not str(result.get("text", "")).strip() and not result.get("images"):
+                    raise RuntimeError("Gemini returned HTTP 200 with empty content")
+                return result
             except HTTPStatusError as e:
                 last_err = e
                 status = e.status_code

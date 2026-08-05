@@ -29,12 +29,16 @@ from app.routers import api_keys as api_keys_router
 from app.routers import model_mapping as model_mapping_router
 from app.routers import gems as gems_router
 from app.routers import patrol as patrol_router
+from app.routers import flow_bridge as flow_bridge_router
 from app.core.api_key_store import ApiKeyPool
 from app.core.model_mapping import ModelMapping
 from app.core.gem_mapping import GemMapping
 from app.core.patrol import PatrolService
+from app.core.flow_bridge import FlowBridgeService
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
+flow_bridge_service = FlowBridgeService(account_pool)
+flow_bridge_router.set_service(flow_bridge_service)
 
 log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 logging.basicConfig(
@@ -52,6 +56,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"API Key: {mask_secret(settings.api_key)}")
     app.state.patrol = PatrolService(account_pool)
     account_pool.set_browser_failure_notifier(app.state.patrol.notify_browser_failure)
+    account_pool.set_flow_cookie_refresher(flow_bridge_service.refresh_account)
     await account_pool.initialize()
     await app.state.patrol.start()
 
@@ -156,6 +161,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await account_pool.shutdown()
+    await flow_bridge_service.aclose()
 
 
 app = FastAPI(
@@ -311,6 +317,8 @@ app.include_router(api_keys_router.router, dependencies=_admin_deps)
 app.include_router(model_mapping_router.router, dependencies=_admin_deps)
 app.include_router(gems_router.router, dependencies=_admin_deps)
 app.include_router(patrol_router.router, dependencies=_admin_deps)
+app.include_router(flow_bridge_router.admin_router, dependencies=_admin_deps)
+app.include_router(flow_bridge_router.internal_router)
 
 
 @app.get("/health")

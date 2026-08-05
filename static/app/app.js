@@ -80,7 +80,7 @@ async function loadSectionData(sectionId) {
                 await loadAccounts();
                 break;
             case 'browser':
-                await loadAccounts();
+                await Promise.all([loadAccounts(), loadFlowBridgeStatus()]);
                 break;
             case 'usage-stats':
                 await loadUsageStats();
@@ -313,6 +313,13 @@ function updatePlaygroundModels(modelsSet) {
 // ============================================================================
 
 function browserProfileMeta(account) {
+    if (account.source === 'flow') {
+        return {
+            status: account.status === 'active' ? 'ready' : 'error',
+            label: account.status === 'active' ? 'Flow 已连接' : 'Flow 需更新',
+            detail: `${account.flow_email || 'Flow 账号'} · Token #${account.flow_token_id || '-'}`,
+        };
+    }
     const labels = { standby: '待首次使用', refreshing: '正在获取', manual: '等待人工登录', ready: '已就绪', error: '需要维护' };
     const status = account.browser_profile_status || 'standby';
     const detail = account.browser_profile_error || (account.browser_profile_updated_at
@@ -328,16 +335,18 @@ function renderBrowserCenter(accounts) {
         const profile = browserProfileMeta(account);
         return `<article class="browser-profile-card ${escapeAttr(profile.status)}">
             <div class="browser-profile-head">
-                <div><b>${escapeHtml(account.label || account.id)}</b><small>${escapeHtml(account.id)} · 独立 Chromium Profile</small></div>
+                <div><b>${escapeHtml(account.label || account.id)}</b><small>${escapeHtml(account.id)} · ${account.source === 'flow' ? `Flow Profile #${escapeHtml(String(account.flow_token_id || '-'))}` : '独立 Chromium Profile'}</small></div>
                 <span class="browser-profile-state ${escapeAttr(profile.status)}">${escapeHtml(profile.label)}</span>
             </div>
             <div class="browser-profile-detail">${escapeHtml(profile.detail)}</div>
-            <div class="browser-profile-actions">
+            <div class="browser-profile-actions">${account.source === 'flow' ? `
+                <button class="btn btn-sm btn-primary flow-account-refresh-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-arrows-rotate"></i> 从 Flow 更新 CK</button>
+            ` : `
                 <button class="btn btn-sm btn-primary browser-open-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-arrow-up-right-from-square"></i> 打开浏览器</button>
                 <button class="btn btn-sm btn-success browser-capture-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-cookie-bite"></i> 登录完成，同步 CK</button>
                 <button class="btn btn-sm btn-outline browser-refresh-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-rotate"></i> 自动获取</button>
                 <button class="btn btn-sm btn-outline browser-close-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-xmark"></i> 关闭</button>
-            </div>
+            `}</div>
         </article>`;
     }).join('') : '<div class="browser-profile-empty">暂无账号，请先到账号管理添加账号。</div>';
     container.querySelectorAll('.browser-open-btn').forEach(btn => {
@@ -352,6 +361,49 @@ function renderBrowserCenter(accounts) {
     container.querySelectorAll('.browser-close-btn').forEach(btn => {
         btn.addEventListener('click', () => closeManualBrowser(btn.dataset.accountId));
     });
+    container.querySelectorAll('.flow-account-refresh-btn').forEach(btn => {
+        btn.addEventListener('click', () => refreshFlowAccount(btn.dataset.accountId, btn));
+    });
+}
+
+async function loadFlowBridgeStatus() {
+    const state = document.getElementById('flowBridgeState');
+    if (!state) return;
+    try {
+        const result = await apiCall('GET', '/admin/flow-bridge/status');
+        state.textContent = result.configured ? 'Flow 已连接' : 'Flow 未配置';
+        state.classList.toggle('ready', Boolean(result.configured));
+    } catch (_) {
+        state.textContent = 'Flow 不可用';
+        state.classList.remove('ready');
+    }
+}
+
+async function syncFlowBridgeAccounts(button = null) {
+    if (button) button.disabled = true;
+    try {
+        const result = await apiCall('POST', '/admin/flow-bridge/sync');
+        showToast(`Flow 同步完成：成功 ${result.refreshed || 0}，失败 ${result.failed || 0}`, result.failed ? 'warning' : 'success');
+        await Promise.all([loadAccounts(), loadDashboard(), loadFlowBridgeStatus()]);
+    } catch (error) {
+        showToast(`Flow 同步失败：${error.message}`, 'error');
+        await loadFlowBridgeStatus();
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function refreshFlowAccount(accountId, button = null) {
+    if (button) button.disabled = true;
+    try {
+        await apiCall('POST', `/admin/flow-bridge/accounts/${accountId}/refresh`);
+        showToast('已从 Flow 更新 Gemini CK', 'success');
+        await Promise.all([loadAccounts(), loadDashboard()]);
+    } catch (error) {
+        showToast(`Flow CK 更新失败：${error.message}`, 'error');
+    } finally {
+        if (button) button.disabled = false;
+    }
 }
 
 async function loadAccounts() {
@@ -1266,6 +1318,11 @@ function initEventListeners() {
     const refreshBtn = document.getElementById('refreshAccountStatusBtn');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', loadDashboard);
+    }
+
+    const syncFlowBridgeBtn = document.getElementById('syncFlowBridgeBtn');
+    if (syncFlowBridgeBtn) {
+        syncFlowBridgeBtn.addEventListener('click', () => syncFlowBridgeAccounts(syncFlowBridgeBtn));
     }
 
     // Check update button

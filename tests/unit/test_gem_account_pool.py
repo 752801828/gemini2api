@@ -308,3 +308,13 @@ def test_refresher_clears_only_chromium_singleton_markers():
 
     assert '("SingletonLock", "SingletonCookie", "SingletonSocket")' in source
     assert "_clear_stale_chromium_locks(profile_dir)" in source
+
+
+def test_browser_center_exposes_flow_cookie_sync():
+    root = Path(__file__).resolve().parents[2]
+    html = (root / "static" / "components" / "section-browser.html").read_text(encoding="utf-8")
+    app = (root / "static" / "app" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="syncFlowBridgeBtn"' in html
+    assert "/admin/flow-bridge/sync" in app
+    assert "/admin/flow-bridge/accounts/${accountId}/refresh" in app

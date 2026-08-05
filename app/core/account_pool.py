@@ -68,6 +68,9 @@ class Account:
     browser_profile_status: str = "standby"
     browser_profile_updated_at: str | None = None
     browser_profile_error: str = ""
+    source: str = "manual"
+    flow_token_id: int | None = None
+    flow_email: str = ""
 
 
 class AccountPool:
@@ -88,6 +91,7 @@ class AccountPool:
         self._bg_tasks: set = set()
         self._browser_refresh_locks: dict[str, asyncio.Lock] = {}
         self._browser_failure_notifier = None
+        self._flow_cookie_refresher = None
 
     @property
     def accounts(self) -> list[Account]:
@@ -137,6 +141,9 @@ class AccountPool:
                     psid=psid.strip().strip('"').strip("'").rstrip(";"),
                     psidts=(item.get("psidts") or "").strip().strip('"').strip("'").rstrip(";"),
                     label=item.get("label", f"account-{i}"),
+                    source=item.get("source", "manual"),
+                    flow_token_id=item.get("flow_token_id"),
+                    flow_email=item.get("flow_email", ""),
                 )
             except Exception as e:
                 logger.warning(f"Skipping corrupt account entry #{i} in {path}: {e}")
@@ -177,6 +184,12 @@ class AccountPool:
                 pass
 
         async def refresh_profile() -> bool:
+            if account.source == "flow" and self._flow_cookie_refresher:
+                try:
+                    return bool((await self._flow_cookie_refresher(account)).get("success"))
+                except Exception as error:
+                    await self._browser_failure(account, str(error), account.client.is_healthy)
+                    raise
             return bool((await self._refresh_account_browser(account)).get("success"))
 
         client = GeminiWebClient(
@@ -192,7 +205,7 @@ class AccountPool:
         else:
             account.status = AccountStatus.EXPIRED
             logger.warning(f"Account {account.id} ({account.label}) failed to initialize")
-            if settings.browser_refresh_enabled:
+            if settings.browser_refresh_enabled and account in self._accounts:
                 task = asyncio.create_task(self._refresh_account_browser(account))
                 self._bg_tasks.add(task)
                 task.add_done_callback(self._bg_tasks.discard)
@@ -341,6 +354,44 @@ class AccountPool:
             label=label or account_id,
         )
         await self._init_account_client(account)
+        self._accounts.append(account)
+        self._save_to_file()
+        return account
+
+    def get_flow_account(self, flow_token_id: int) -> Account | None:
+        return next((a for a in self._accounts if a.source == "flow" and a.flow_token_id == int(flow_token_id)), None)
+
+    async def upsert_flow_account(
+        self,
+        flow_token_id: int,
+        *,
+        psid: str,
+        psidts: str = "",
+        email: str = "",
+        name: str = "",
+    ) -> Account:
+        token_id = int(flow_token_id)
+        account = self.get_flow_account(token_id)
+        label = (name or email or f"Flow #{token_id}").strip()
+        if account is not None:
+            account.label = label
+            account.flow_email = email.strip().lower()
+            await self._apply_account_cookies(account, psid, psidts)
+            return account
+        account = Account(
+            id=f"flow-{token_id}",
+            psid=psid.strip(),
+            psidts=psidts.strip(),
+            label=label,
+            source="flow",
+            flow_token_id=token_id,
+            flow_email=email.strip().lower(),
+        )
+        await self._init_account_client(account)
+        if not account.client or not account.client.is_healthy:
+            if account.client:
+                await account.client.shutdown()
+            raise RuntimeError("Flow cookies are not a valid Gemini login session")
         self._accounts.append(account)
         self._save_to_file()
         return account
@@ -502,6 +553,9 @@ class AccountPool:
     def set_browser_failure_notifier(self, notifier) -> None:
         self._browser_failure_notifier = notifier
 
+    def set_flow_cookie_refresher(self, refresher) -> None:
+        self._flow_cookie_refresher = refresher
+
     async def check_account(self, account_id: str) -> dict:
         for account in self._accounts:
             if account.id == account_id:
@@ -623,6 +677,9 @@ class AccountPool:
                 "browser_profile_status": a.browser_profile_status,
                 "browser_profile_updated_at": a.browser_profile_updated_at,
                 "browser_profile_error": a.browser_profile_error,
+                "source": a.source,
+                "flow_token_id": a.flow_token_id,
+                "flow_email": a.flow_email,
             }
             if include_credentials:
                 current_psid, current_psidts = a.client.cookie_credentials if a.client else (a.psid, a.psidts)
@@ -773,6 +830,9 @@ class AccountPool:
                 "psid": a.psid,
                 "psidts": a.psidts,
                 "label": a.label,
+                "source": a.source,
+                "flow_token_id": a.flow_token_id,
+                "flow_email": a.flow_email,
             })
         path = Path(settings.accounts_file)
         # 原子写：accounts.json 存 PSID 凭据，写入中途崩溃/断电不得截断成半截 JSON（VULN-010）。

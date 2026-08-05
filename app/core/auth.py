@@ -14,6 +14,7 @@ STATIC_EXTENSIONS = {".html", ".css", ".js", ".ico", ".png", ".jpg", ".svg", ".w
 # 所有管理类路由统一挂在 /admin/* 前缀下；这些路径由 verify_admin_key 负责校验，
 # 全局 verify_api_key 对其放行以避免双重校验冲突（设置独立 admin_api_key 后两把 key 不同会互相误拒）。
 ADMIN_PATH_PREFIX = "/admin"
+FLOW_BRIDGE_PATH_PREFIX = "/internal/flow-bridge"
 
 
 def _is_public_path(path: str) -> bool:
@@ -75,6 +76,8 @@ async def verify_api_key(request: Request):
 
     # 管理类路由由 verify_admin_key（在 include_router 时挂载）负责，避免与独立 admin_api_key 冲突
     if path.startswith(ADMIN_PATH_PREFIX):
+        return
+    if path.startswith(FLOW_BRIDGE_PATH_PREFIX):
         return
 
     key = _extract_request_key(request)
