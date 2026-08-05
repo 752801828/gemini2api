@@ -44,7 +44,7 @@ function render(data) {
 
     const imageLookup = new Map((images || []).map(image => [image.name, image.id]));
     renderImages(images || []);
-    document.getElementById('patrol-history').innerHTML = history.length ? history.map(round => renderRound(round, imageLookup)).join('') : '<div class="patrol-empty">暂无盘巡记录</div>';
+    document.getElementById('patrol-history').innerHTML = history.length ? history.map((round, index) => renderRound(round, imageLookup, index)).join('') : '<div class="patrol-empty">暂无盘巡记录</div>';
     hydrateImageThumbs();
 }
 
@@ -82,9 +82,9 @@ async function hydrateImageThumbs() {
     });
 }
 
-function renderRound(round, imageLookup) {
+function renderRound(round, imageLookup, roundIndex) {
     const statusMap = { success: '全部通过', partial: '存在失败', failed: '执行失败', empty: '无任务', cancelled: '已取消', running: '执行中' };
-    const tasks = (round.tasks || []).map(task => {
+    const tasks = (round.tasks || []).map((task, taskIndex) => {
         const imageNames = task.image_samples || (task.image_sample ? [task.image_sample] : []);
         const imageIds = task.image_sample_ids || [];
         const imageItems = imageNames.map((name, index) => ({ name, id: imageIds[index] || imageLookup.get(name) || '' }));
@@ -95,6 +95,7 @@ function renderRound(round, imageLookup) {
         return `
         <details class="patrol-task-detail">
             <summary class="patrol-task">
+                <span class="patrol-task-index">任务 ${String(taskIndex + 1).padStart(2, '0')}</span>
                 <b title="${escapeHtml(task.account_id)}">${escapeHtml(task.account_label)}</b>
                 <span title="${escapeHtml(imageNames.join('、'))}">${typeLabel} #${task.sequence || 1}${task.type === 'image' ? ` · ${imageNames.length} 张` : ''}</span>
                 <span>${escapeHtml(task.model || '-')}</span>
@@ -103,6 +104,7 @@ function renderRound(round, imageLookup) {
                 <i class="fas fa-chevron-down patrol-task-chevron"></i>
             </summary>
             <div class="patrol-task-info">
+                <div class="patrol-task-toolbar"><b>${typeLabel}任务详情</b><button class="patrol-task-delete" type="button" data-delete-task data-round-id="${escapeHtml(round.id)}" data-task-index="${taskIndex}"><i class="fas fa-trash"></i> 删除此任务记录</button></div>
                 <div class="patrol-task-field"><span>任务</span><p>${typeLabel}测试 #${task.sequence || 1}</p></div>
                 <div class="patrol-task-field"><span>模型</span><p>${escapeHtml(task.model || '-')}</p></div>
                 <div class="patrol-task-field"><span>状态 / 耗时</span><p class="${task.success ? 'patrol-ok' : 'patrol-bad'}">${task.success ? '成功' : '失败'} · ${duration(task.duration_ms)}</p></div>
@@ -115,11 +117,12 @@ function renderRound(round, imageLookup) {
     const notify = round.notification?.sent ? ' · 飞书已通知' : round.notification?.error ? ' · 飞书通知失败' : '';
     return `<details class="patrol-round">
         <summary>
+            <span class="patrol-round-mark">轮次 ${String(roundIndex + 1).padStart(2, '0')}</span>
             <span class="patrol-round-title"><b>${escapeHtml(round.id)}</b><small>${localTime(round.started_at)} · ${round.trigger === 'scheduled' ? '定时' : '手动'} · ${duration(round.duration_ms)}${notify}</small></span>
             <span class="patrol-round-score">${round.success || 0}/${round.total || 0}</span>
             <span class="patrol-pill ${escapeHtml(round.status)}">${statusMap[round.status] || escapeHtml(round.status)}</span>
         </summary>
-        <div class="patrol-tasks">${tasks || '<div class="patrol-empty">本轮没有任务</div>'}</div>
+        <div class="patrol-tasks"><div class="patrol-task-list-head"><span>本轮任务</span><small>${round.total || 0} 条记录 · 点击任务行查看完整内容</small></div>${tasks || '<div class="patrol-empty">本轮没有任务</div>'}</div>
     </details>`;
 }
 
@@ -206,6 +209,17 @@ async function deleteImage(imageId) {
     }
 }
 
+async function deleteTask(roundId, taskIndex) {
+    if (!window.confirm('确定删除这条任务记录吗？删除后会重新计算本轮和历史统计。')) return;
+    try {
+        await apiCall('DELETE', `/admin/patrol/rounds/${encodeURIComponent(roundId)}/tasks/${taskIndex}`);
+        showToast('任务记录已删除', 'success');
+        await loadPatrol();
+    } catch (error) {
+        showToast(`删除任务失败：${error.message}`, 'error');
+    }
+}
+
 async function runRound() {
     try {
         await apiCall('POST', '/admin/patrol/run');
@@ -229,6 +243,10 @@ export function initPatrol() {
     document.getElementById('patrol-image-library')?.addEventListener('click', event => {
         const button = event.target.closest('[data-delete-image]');
         if (button) deleteImage(button.dataset.deleteImage);
+    });
+    document.getElementById('patrol-history')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-delete-task]');
+        if (button) deleteTask(button.dataset.roundId, Number(button.dataset.taskIndex));
     });
     clearInterval(timer);
     timer = setInterval(() => {

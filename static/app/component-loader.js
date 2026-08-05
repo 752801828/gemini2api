@@ -76,7 +76,7 @@ async function loadComponents(components) {
  */
 async function initializeComponents() {
     const basePath = 'components/';
-    const version = '?v=20';
+    const version = '?v=21';
 
     try {
         // 首先加载 header
@@ -89,6 +89,7 @@ async function initializeComponents() {
         const sectionComponents = [
             { path: `${basePath}section-dashboard.html${version}`, container: '#content-container', position: 'beforeend' },
             { path: `${basePath}section-accounts.html${version}`, container: '#content-container', position: 'beforeend' },
+            { path: `${basePath}section-browser.html${version}`, container: '#content-container', position: 'beforeend' },
             { path: `${basePath}section-playground.html${version}`, container: '#content-container', position: 'beforeend' },
             { path: `${basePath}section-usage-stats.html${version}`, container: '#content-container', position: 'beforeend' },
             { path: `${basePath}section-patrol.html${version}`, container: '#content-container', position: 'beforeend' },

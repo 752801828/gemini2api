@@ -87,6 +87,7 @@ class AccountPool:
         # 持有后台 fire-and-forget task 的强引用，防止被 GC 中途回收
         self._bg_tasks: set = set()
         self._browser_refresh_locks: dict[str, asyncio.Lock] = {}
+        self._browser_failure_notifier = None
 
     @property
     def accounts(self) -> list[Account]:
@@ -164,6 +165,17 @@ class AccountPool:
         self._accounts.append(account)
 
     async def _init_account_client(self, account: Account):
+        profile_root = Path("data/browser_profiles").resolve()
+        profile_meta = (profile_root / account.id / "gemini2api-profile.json").resolve()
+        if profile_root in profile_meta.parents:
+            try:
+                metadata = json.loads(profile_meta.read_text(encoding="utf-8"))
+                if metadata.get("profile_id") == account.id and metadata.get("updated_at"):
+                    account.browser_profile_status = "ready"
+                    account.browser_profile_updated_at = metadata["updated_at"]
+            except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+                pass
+
         async def refresh_profile() -> bool:
             return bool((await self._refresh_account_browser(account)).get("success"))
 
@@ -405,13 +417,22 @@ class AccountPool:
                 account.browser_profile_status = "error"
                 account.browser_profile_error = error
                 logger.warning("Account %s browser profile refresh failed: %s", account.id, error)
-                return {"success": False, "profile_id": account.id, "error": error}
+                notification = None
+                if self._browser_failure_notifier:
+                    try:
+                        notification = await self._browser_failure_notifier(account, error)
+                    except Exception as notify_error:
+                        logger.warning("Browser maintenance notification failed: %s", str(notify_error)[:300])
+                return {"success": False, "profile_id": account.id, "error": error, "notification": notification}
 
     async def refresh_account_browser(self, account_id: str) -> dict:
         account = self._get_account(account_id)
         if account is None:
             raise ValueError(f"Account {account_id} not found")
         return await self._refresh_account_browser(account)
+
+    def set_browser_failure_notifier(self, notifier) -> None:
+        self._browser_failure_notifier = notifier
 
     async def check_account(self, account_id: str) -> dict:
         for account in self._accounts:

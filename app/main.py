@@ -50,9 +50,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     logger.info(f"API Key: {mask_secret(settings.api_key)}")
-    await account_pool.initialize()
-
     app.state.patrol = PatrolService(account_pool)
+    account_pool.set_browser_failure_notifier(app.state.patrol.notify_browser_failure)
+    await account_pool.initialize()
     await app.state.patrol.start()
 
     app.state.log_store = LogStore()

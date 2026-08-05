@@ -170,6 +170,21 @@ class PatrolService:
         self._save_images()
         return True
 
+    def delete_task(self, round_id: str, task_index: int) -> bool:
+        round_data = next((item for item in self.history if item.get("id") == round_id), None)
+        tasks = round_data.get("tasks", []) if round_data else []
+        if not 0 <= task_index < len(tasks):
+            return False
+        tasks.pop(task_index)
+        round_data["total"] = len(tasks)
+        round_data["success"] = sum(bool(task.get("success")) for task in tasks)
+        round_data["failed"] = round_data["total"] - round_data["success"]
+        round_data["status"] = "empty" if not tasks else "success" if not round_data["failed"] else "partial"
+        if self.current and self.current.get("id") == round_id and not (self._round_task and not self._round_task.done()):
+            self.current = copy.deepcopy(round_data)
+        self._save_history()
+        return True
+
     async def start(self) -> None:
         if not self._scheduler_task or self._scheduler_task.done():
             self._stopping = False
@@ -365,10 +380,26 @@ class PatrolService:
             self.current["success" if result["success"] else "failed"] += 1
 
     async def _notify_feishu(self, round_data: dict) -> dict:
+        return await self._send_feishu(self._notification_text(round_data), "patrol")
+
+    async def notify_browser_failure(self, account, error: str) -> dict:
+        if not self.config.get("webhook_url"):
+            return {"sent": False, "error": "飞书 Webhook 未配置"}
+        text = "\n".join([
+            "【Gemini2API 浏览器维护告警】",
+            f"账号：{account.label}（{account.id}）",
+            "状态：内置浏览器获取 Cookie 失败",
+            f"原因：{error[:300]}",
+            f"时间：{datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
+            "处理：请进入管理台「浏览器中心」重试或更新 Cookie。",
+        ])
+        return await self._send_feishu(text, "browser maintenance")
+
+    async def _send_feishu(self, text: str, source: str) -> dict:
         webhook = self.config.get("webhook_url", "")
         secret = self.config.get("webhook_secret", "")
         timestamp = str(int(time.time()))
-        payload = {"msg_type": "text", "content": {"text": self._notification_text(round_data)}}
+        payload = {"msg_type": "text", "content": {"text": text}}
         if secret:
             digest = hmac.new(f"{timestamp}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
             payload.update({"timestamp": timestamp, "sign": base64.b64encode(digest).decode()})
@@ -382,7 +413,7 @@ class PatrolService:
                 raise RuntimeError(body.get("msg") or body.get("StatusMessage") or f"Feishu code {code}")
             return {"sent": True, "error": ""}
         except Exception as exc:
-            logger.warning("Feishu patrol notification failed: %s", _safe_error(exc))
+            logger.warning("Feishu %s notification failed: %s", source, _safe_error(exc))
             return {"sent": False, "error": _safe_error(exc)}
 
     @staticmethod

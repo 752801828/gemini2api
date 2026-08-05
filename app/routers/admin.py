@@ -198,9 +198,16 @@ async def refresh_account_from_browser(account_id: str):
         )
     if result.get("success"):
         return {"status": "ok", **result}
+    message = result.get("error", "Browser refresh failed")
+    notification = result.get("notification")
+    if notification:
+        if notification.get("sent"):
+            message += "（已发送飞书维护告警）"
+        else:
+            message += f"（飞书告警发送失败：{notification.get('error', '未知错误')}）"
     return JSONResponse(
         status_code=503,
-        content={"error": {"message": result.get("error", "Browser refresh failed"), "type": "browser_refresh_error"}},
+        content={"error": {"message": message, "type": "browser_refresh_error"}},
     )
 
 

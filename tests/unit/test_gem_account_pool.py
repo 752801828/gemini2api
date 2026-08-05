@@ -188,3 +188,53 @@ def test_browser_profile_refresh_hot_updates_and_persists():
     assert account.status == AccountStatus.ACTIVE
     assert account.browser_profile_status == "ready"
     assert saved == [True]
+
+
+def test_browser_profile_failure_notifies_maintenance():
+    class CookieClient:
+        is_healthy = True
+        cookie_credentials = ("old-psid", "old-psidts")
+
+    pool = AccountPool()
+    account = Account("account-0", "old-psid", "old-psidts", client=CookieClient(), status=AccountStatus.ACTIVE)
+    pool._accounts = [account]
+    pool._request_browser_profile = AsyncMock(side_effect=RuntimeError("browser unavailable"))
+    notices = []
+
+    async def notify(failed_account, error):
+        notices.append((failed_account.id, error))
+        return {"sent": True, "error": ""}
+
+    pool.set_browser_failure_notifier(notify)
+    result = asyncio.run(pool.refresh_account_browser("account-0"))
+
+    assert result["success"] is False
+    assert result["notification"]["sent"] is True
+    assert notices == [("account-0", "browser unavailable")]
+    assert account.status == AccountStatus.ACTIVE
+
+
+def test_browser_profile_ready_state_survives_restart(tmp_path, monkeypatch):
+    class HealthyClient:
+        is_healthy = True
+
+        def __init__(self, **_kwargs):
+            pass
+
+        async def initialize(self):
+            pass
+
+    profile = tmp_path / "data" / "browser_profiles" / "account-0"
+    profile.mkdir(parents=True)
+    (profile / "gemini2api-profile.json").write_text(
+        '{"profile_id":"account-0","updated_at":"2026-08-05T00:00:00+00:00"}', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    account = Account("account-0", "psid", "psidts")
+    pool = AccountPool()
+
+    with patch("app.core.account_pool.GeminiWebClient", HealthyClient):
+        asyncio.run(pool._init_account_client(account))
+
+    assert account.browser_profile_status == "ready"
+    assert account.browser_profile_updated_at == "2026-08-05T00:00:00+00:00"

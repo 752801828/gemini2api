@@ -7,7 +7,7 @@ import { initThemeSwitcher } from './theme-switcher.js';
 import { initAuth, apiCall, logout } from './auth.js';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
-import { initPatrol, loadPatrol } from './patrol.js?v=5';
+import { initPatrol, loadPatrol } from './patrol.js?v=6';
 import { initLogs } from './logs.js';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
@@ -77,6 +77,9 @@ async function loadSectionData(sectionId) {
                 await loadDashboard();
                 break;
             case 'accounts':
+                await loadAccounts();
+                break;
+            case 'browser':
                 await loadAccounts();
                 break;
             case 'usage-stats':
@@ -309,10 +312,42 @@ function updatePlaygroundModels(modelsSet) {
 // Accounts
 // ============================================================================
 
+function browserProfileMeta(account) {
+    const labels = { standby: '待首次使用', refreshing: '正在获取', ready: '已就绪', error: '需要维护' };
+    const status = account.browser_profile_status || 'standby';
+    const detail = account.browser_profile_error || (account.browser_profile_updated_at
+        ? `最近更新 ${new Date(account.browser_profile_updated_at).toLocaleString('zh-CN', { hour12: false })}`
+        : `Profile ${account.browser_profile_id || account.id}`);
+    return { status, label: labels[status] || status, detail };
+}
+
+function renderBrowserCenter(accounts) {
+    const container = document.getElementById('browserProfilesList');
+    if (!container) return;
+    container.innerHTML = accounts.length ? accounts.map(account => {
+        const profile = browserProfileMeta(account);
+        return `<article class="browser-profile-card ${escapeAttr(profile.status)}">
+            <div class="browser-profile-head">
+                <div><b>${escapeHtml(account.label || account.id)}</b><small>${escapeHtml(account.id)} · 独立 Chromium Profile</small></div>
+                <span class="browser-profile-state ${escapeAttr(profile.status)}">${escapeHtml(profile.label)}</span>
+            </div>
+            <div class="browser-profile-detail">${escapeHtml(profile.detail)}</div>
+            <div class="browser-profile-actions">
+                <button class="btn btn-sm btn-primary browser-refresh-btn" data-account-id="${escapeAttr(account.id)}"><i class="fas fa-rotate"></i> 立即获取 CK</button>
+                <a class="btn btn-sm btn-outline" href="#accounts"><i class="fas fa-user-gear"></i> 账号管理</a>
+            </div>
+        </article>`;
+    }).join('') : '<div class="browser-profile-empty">暂无账号，请先到账号管理添加账号。</div>';
+    container.querySelectorAll('.browser-refresh-btn').forEach(btn => {
+        btn.addEventListener('click', () => refreshAccountBrowser(btn.dataset.accountId, btn));
+    });
+}
+
 async function loadAccounts() {
     try {
         const data = await apiCall('GET', '/admin/accounts');
         const accounts = data.accounts || [];
+        renderBrowserCenter(accounts);
 
         const container = document.getElementById('accountsList');
         if (!container) return;
@@ -336,10 +371,7 @@ async function loadAccounts() {
         container.innerHTML = accounts.map(account => {
             const idEsc = escapeAttr(account.id);
             const labelEsc = escapeAttr(account.label || '');
-            const profileLabels = { standby: '待首次使用', refreshing: '正在续期', ready: '已就绪', error: '续期失败' };
-            const profileStatus = account.browser_profile_status || 'standby';
-            const profileText = profileLabels[profileStatus] || profileStatus;
-            const profileDetail = account.browser_profile_error || (account.browser_profile_updated_at ? `最近更新 ${new Date(account.browser_profile_updated_at).toLocaleString('zh-CN', { hour12: false })}` : `Profile ${account.browser_profile_id || account.id}`);
+            const profile = browserProfileMeta(account);
             return `
             <div class="account-card">
                 <div class="account-card-header">
@@ -367,8 +399,8 @@ async function loadAccounts() {
                 </div>
                 <div class="account-browser-profile">
                     <i class="fas fa-earth-asia"></i>
-                    <b>浏览器 Profile <span class="browser-profile-chip ${escapeAttr(profileStatus)}">${escapeHtml(profileText)}</span></b>
-                    <small title="${escapeAttr(profileDetail)}">${escapeHtml(profileDetail)}</small>
+                    <b>浏览器 Profile <span class="browser-profile-chip ${escapeAttr(profile.status)}">${escapeHtml(profile.label)}</span></b>
+                    <small title="${escapeAttr(profile.detail)}">${escapeHtml(profile.detail)}</small>
                 </div>
                 <div class="account-actions">
                     <button class="btn btn-sm btn-outline acc-check-btn" data-account-id="${idEsc}">
@@ -396,7 +428,7 @@ async function loadAccounts() {
             btn.addEventListener('click', () => openUpdateCookieModal(btn.dataset.accountId, btn.dataset.accountLabel || ''));
         });
         container.querySelectorAll('.acc-browser-btn').forEach(btn => {
-            btn.addEventListener('click', () => refreshAccountBrowser(btn.dataset.accountId));
+            btn.addEventListener('click', () => refreshAccountBrowser(btn.dataset.accountId, btn));
         });
         container.querySelectorAll('.acc-remove-btn').forEach(btn => {
             btn.addEventListener('click', () => removeAccount(btn.dataset.accountId));
@@ -419,7 +451,11 @@ async function checkAccount(accountId) {
     }
 }
 
-async function refreshAccountBrowser(accountId) {
+async function refreshAccountBrowser(accountId, button = null) {
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在获取';
+    }
     try {
         showToast('正在通过内置浏览器续期，请稍候…', 'info');
         await apiCall('POST', `/admin/accounts/${accountId}/browser-refresh`);
@@ -427,7 +463,7 @@ async function refreshAccountBrowser(accountId) {
         await loadAccounts();
         await loadDashboard();
     } catch (error) {
-        showToast(`浏览器续期失败: ${error.message}`, 'error');
+        showToast(`浏览器续期失败：${error.message}`, 'error');
         await loadAccounts();
     }
 }

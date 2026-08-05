@@ -1,5 +1,7 @@
 import json
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.core.patrol import IMAGE_PROMPTS, TEXT_PROMPTS, PatrolService
 
@@ -63,3 +65,23 @@ def test_round_records_text_and_random_image_results(tmp_path):
     assert len(overview["history"][0]["tasks"][2]["response_preview"]) == 300
     assert len(overview["history"][0]["tasks"][2]["image_sample_ids"]) == len(overview["history"][0]["tasks"][2]["image_samples"])
     assert all(call["model"] in {"gemini-flash", "gemini-pro"} for call in pool.calls)
+
+    assert service.delete_task("round-1", 1) is True
+    updated = service.overview()
+    assert updated["stats"]["history"] == {"rounds": 1, "tasks": 4, "success": 4}
+    assert service.delete_task("round-1", 99) is False
+
+
+def test_browser_failure_notification_reuses_patrol_webhook(tmp_path):
+    service = PatrolService(FakePool(), tmp_path)
+    service.config["webhook_url"] = "https://open.feishu.cn/open-apis/bot/v2/hook/example"
+    service._send_feishu = AsyncMock(return_value={"sent": True, "error": ""})
+
+    result = asyncio.run(service.notify_browser_failure(SimpleNamespace(id="a1", label="主账号"), "CK expired"))
+
+    assert result["sent"] is True
+    message, source = service._send_feishu.await_args.args
+    assert "浏览器维护告警" in message
+    assert "主账号（a1）" in message
+    assert "CK expired" in message
+    assert source == "browser maintenance"

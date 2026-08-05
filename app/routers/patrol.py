@@ -85,3 +85,10 @@ async def delete_patrol_image(request: Request, image_id: str):
     if not _service(request).delete_image(image_id):
         raise HTTPException(status_code=404, detail="图片不存在")
     return {"status": "ok"}
+
+
+@router.delete("/rounds/{round_id}/tasks/{task_index}")
+async def delete_patrol_task(request: Request, round_id: str, task_index: int):
+    if not _service(request).delete_task(round_id, task_index):
+        raise HTTPException(status_code=404, detail="任务记录不存在")
+    return {"status": "ok"}
