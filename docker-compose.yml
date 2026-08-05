@@ -1,9 +1,12 @@
 services:
   gemini2api:
-    image: ghcr.io/xwteam/gemini2api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gemini2api:local
     container_name: gemini2api
     # 镜像以 root 启动后由 docker-entrypoint.sh 修复 ./data、./api 卷属主再降权到非 root
-    # 的 appuser 运行；无需在此指定 user:，历史部署 `docker compose pull` 即可无缝升级。
+    # 的 appuser 运行；无需在此指定 user:，更新代码后用 `docker compose up -d --build` 部署。
     env_file:
       - .env
     environment:
