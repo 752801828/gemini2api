@@ -8,6 +8,7 @@ services:
       - .env
     environment:
       - TZ=Asia/Shanghai
+      - BROWSER_REFRESHER_URL=http://refresher:6080
     ports:
       - "5918:5918"
     volumes:
@@ -25,29 +26,26 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
+    depends_on:
+      - refresher
 
-  # Cookie 自动保活（可选）：用真实 Chromium 定时访问 Gemini，触发前端 JS 续期
-  # __Secure-1PSIDTS，再通过 /admin 接口热更新主服务的 Cookie。详见 README「Cookie 自动保活」。
-  # 默认不随 `docker compose up` 启动；需要时用 `docker compose --profile refresher up -d` 启用。
+  # 内置 Cookie 浏览器：每个账号使用 data/browser_profiles/<account-id> 独立 Profile；
+  # 主服务检测到登录失效或管理员手动触发时，按需启动 Chromium 获取并热更新 Cookie。
   refresher:
     build:
       context: ./refresher
       dockerfile: Dockerfile
     image: gemini2api-refresher:latest
     container_name: gemini2api-refresher
-    profiles: ["refresher"]
     env_file:
       - .env
     environment:
       - TZ=Asia/Shanghai
-      # 主服务的内部地址（compose 网络内按服务名解析）。
-      - GEMINI2API_URL=http://gemini2api:5918
-      # 续期周期（分钟，与 README/主服务的 REFRESH_INTERVAL 一致）。
-      - REFRESH_INTERVAL=${REFRESH_INTERVAL:-8}
-      # /admin 鉴权：ADMIN_API_KEY/API_KEY 走 .env，须与主服务匹配，否则通知 401。
+      - REFRESHER_MODE=server
+      - REFRESHER_PORT=6080
+    expose:
+      - "6080"
     volumes:
-      # 与主服务共享 ./data：refresher 读 data/refresher_accounts.json、写 data/browser_states/。
+      # 与主服务共享 ./data，浏览器 Profile 持久化且按账号隔离。
       - ./data:/app/data
-    depends_on:
-      - gemini2api
     restart: unless-stopped

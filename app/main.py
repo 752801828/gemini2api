@@ -340,7 +340,7 @@ async def login_page():
 async def index_page():
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file, media_type="text/html")
+        return FileResponse(index_file, media_type="text/html", headers={"Cache-Control": "no-store"})
     return HTMLResponse("<h1>Panel not found</h1>", status_code=404)
 
 

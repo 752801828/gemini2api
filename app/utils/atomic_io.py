@@ -6,6 +6,7 @@ os.replace 在同一文件系统上是原子操作，故临时文件必须与目
 """
 
 import json
+import errno
 import os
 import tempfile
 from pathlib import Path
@@ -22,7 +23,20 @@ def atomic_write_text(path: Union[str, Path], data: str, encoding: str = "utf-8"
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, target)
+        try:
+            os.replace(tmp, target)
+        except OSError as e:
+            # Docker Desktop cannot replace a file that is itself a bind-mount
+            # (EBUSY). The fully flushed temp file still prevents us from
+            # preparing partial JSON; copy it into the mounted inode as the
+            # only supported persistence path for this deployment shape.
+            if e.errno != errno.EBUSY:
+                raise
+            with target.open("w", encoding=encoding) as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.unlink(tmp)
         # rename 本身（目录项更新）在多数 POSIX 文件系统上要 fsync 父目录后才保证
         # 崩溃后持久；否则断电可能丢失这次 rename，目标回退到旧版本。补 fsync 父目录。
         # （Windows 无 O_DIRECTORY，整体 try/except 兜底为 no-op，不破坏默认部署。）

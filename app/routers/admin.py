@@ -187,6 +187,23 @@ async def check_single_account(account_id: str):
         )
 
 
+@router.post("/accounts/{account_id}/browser-refresh")
+async def refresh_account_from_browser(account_id: str):
+    try:
+        result = await account_pool.refresh_account_browser(account_id)
+    except ValueError as e:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"message": str(e), "type": "not_found"}},
+        )
+    if result.get("success"):
+        return {"status": "ok", **result}
+    return JSONResponse(
+        status_code=503,
+        content={"error": {"message": result.get("error", "Browser refresh failed"), "type": "browser_refresh_error"}},
+    )
+
+
 class UpdateCookiesRequest(BaseModel):
     psid: str
     psidts: str = ""

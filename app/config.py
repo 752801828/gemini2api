@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     rate_limit_max: int = 10
     health_check_enabled: bool = True
     health_check_interval: int = 5
+    browser_refresh_enabled: bool = True
+    browser_refresher_url: str = "http://refresher:6080"
+    browser_refresh_timeout: float = 120.0
     accounts_file: str = "accounts.json"
     rotation_strategy: str = "round-robin"
     max_concurrent_per_account: int = 8

@@ -2,7 +2,7 @@ import asyncio
 import types
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.core.account_pool import AccountPool
+from app.core.account_pool import Account, AccountPool, AccountStatus
 
 
 class _FakeClient:
@@ -158,3 +158,33 @@ def test_delete_gem_routes_to_account():
     assert result is True
     assert a0.client.calls == [("delete_gem", "gem-y")]
     assert a1.client.calls == []
+
+
+def test_browser_profile_refresh_hot_updates_and_persists():
+    class CookieClient:
+        is_healthy = False
+        cookie_credentials = ("old-psid", "old-psidts")
+
+        async def reload_cookies(self, psid, psidts):
+            self.is_healthy = True
+            self.cookie_credentials = (psid, psidts)
+            return {"success": True}
+
+    pool = AccountPool()
+    account = Account("account-0", "old-psid", "old-psidts", client=CookieClient(), status=AccountStatus.EXPIRED)
+    pool._accounts = [account]
+    pool._request_browser_profile = AsyncMock(return_value={
+        "psid": "new-psid",
+        "psidts": "new-psidts",
+        "updated_at": "2026-08-05T00:00:00+00:00",
+    })
+    saved = []
+    pool._save_to_file = lambda: saved.append(True)
+
+    result = asyncio.run(pool.refresh_account_browser("account-0"))
+
+    assert result["success"] is True
+    assert (account.psid, account.psidts) == ("new-psid", "new-psidts")
+    assert account.status == AccountStatus.ACTIVE
+    assert account.browser_profile_status == "ready"
+    assert saved == [True]

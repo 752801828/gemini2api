@@ -49,7 +49,7 @@
 > 建议搭配 Gemini Pro 及以上订阅使用，以获得更完整的模型访问权限和更稳定的体验。
 
 > [!IMPORTANT]
-> 由于 Google 风控策略限制，Cookie 会话目前约 2 小时后会被强制失效，暂未找到完美的长期保活方案。一个思路是用**本地浏览器（住宅 IP）**自动刷新并回传 Cookie —— 配套的浏览器插件 [**gemini2api-plugin**](https://github.com/xwteam/gemini2api-plugin) 正在尝试这个方向。如果您在这方面有经验或思路，非常欢迎通过 [Issue](https://github.com/xwteam/gemini2api/issues) 或 PR 分享，期待社区的智慧。
+> Cookie 寿命仍受 Google 风控策略影响。Docker Compose 部署已内置按账号隔离的 Chromium Profile，在登录态失效时自动尝试续期，无需安装外部浏览器插件；若 Google 已彻底注销该账号，仍需手动提供一组可登录的初始 Cookie。
 
 ---
 
@@ -318,15 +318,17 @@ docker compose logs -f
 
 ### Cookie 自动保活
 
-gemini2api 内置 Cookie 自动轮换机制：每 5 分钟通过 Google RotateCookies API 刷新 `__Secure-1PSIDTS`，配合 batchexecute 心跳模拟浏览器活跃行为，延长 session 寿命。
+gemini2api 提供两层 Cookie 保活：常规情况下通过 Google RotateCookies API 刷新 `__Secure-1PSIDTS`；账号检测到登录态失效时，主服务会调用项目内置的 Playwright/Chromium 服务打开 Gemini，并将验证通过的新 Cookie 热更新回账号池。
 
-如需手动更新 Cookie，可通过 Web 面板的「账号管理」→「更新 Cookie」操作，无需重启服务。
+每个账号绑定一个持久化目录 `data/browser_profiles/<account-id>`，不同账号不会共用浏览器 Profile。`docker compose up -d` 会同时启动主服务和仅在内部网络开放的浏览器续期服务，不需要安装或运行项目外的浏览器插件。
+
+如需立即验证，可在 Web 面板「账号管理」点击对应账号的「浏览器续期」；也可以继续使用「更新 Cookie」手动替换初始 Cookie，均无需重启服务。
 
 > [!NOTE]
 > Cookie 寿命受 Google 风控策略影响，数据中心 IP 通常可维持数小时。如 Cookie 频繁过期，建议使用住宅 IP 或增加账号数量做轮询。
 
 > [!TIP]
-> 配套浏览器插件 [**gemini2api-plugin**](https://github.com/xwteam/gemini2api-plugin)：装在你本地浏览器（住宅 IP），定时检测本服务的账号状态，过期时自动刷新本地 Gemini 页面、读取新 Cookie 回传给本服务，尝试突破数据中心 IP 的 2 小时限制。
+> 内置浏览器只使用必要的 `__Secure-1PSID` 与 `__Secure-1PSIDTS` 初始化账号 Profile；如果两者都已被 Google 注销，自动续期不会绕过登录验证，而会保留原凭据并在账号卡片显示失败原因。
 
 ### 3. 验证
 
@@ -600,6 +602,9 @@ curl -X POST http://localhost:5918/admin/reload-cookies \
 | `GEMINI_PSIDTS` | ✅ | — | 浏览器 `__Secure-1PSIDTS` |
 | `API_KEY` | ❌ | 自动生成 | API 访问密钥（`sk-` 开头，留空则首次启动自动生成） |
 | `REFRESH_INTERVAL` | ❌ | `5` | Cookie 刷新周期（分钟） |
+| `BROWSER_REFRESH_ENABLED` | ❌ | `true` | 登录态失效时启用内置浏览器续期 |
+| `BROWSER_REFRESHER_URL` | ❌ | `http://refresher:6080` | Compose 内部浏览器服务地址 |
+| `BROWSER_REFRESH_TIMEOUT` | ❌ | `120` | 单次浏览器续期超时（秒） |
 | `MAX_RETRIES` | ❌ | `3` | 失败重试次数（指数退避） |
 | `PORT` | ❌ | `5918` | 服务端口 |
 | `LOG_LEVEL` | ❌ | `info` | 日志级别（debug/info/warning/error） |

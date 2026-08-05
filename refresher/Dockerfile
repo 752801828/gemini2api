@@ -15,9 +15,8 @@ COPY refresher.py .
 RUN chown -R pwuser:pwuser /app
 USER pwuser
 
-# 进程级心跳健康检查：refresher 卡死/退出（如 Chromium 崩溃）时标记为 unhealthy，
-# 便于编排层自动重启（plain docker run / compose 均生效）。
+# 内置 HTTP 服务健康检查；浏览器按账号请求时才启动，空闲时不占 Chromium 资源。
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD pgrep -f refresher.py >/dev/null || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6080/health', timeout=5)" || exit 1
 
 CMD ["python", "refresher.py"]

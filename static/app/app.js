@@ -7,7 +7,7 @@ import { initThemeSwitcher } from './theme-switcher.js';
 import { initAuth, apiCall, logout } from './auth.js';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
-import { initPatrol, loadPatrol } from './patrol.js?v=4';
+import { initPatrol, loadPatrol } from './patrol.js?v=5';
 import { initLogs } from './logs.js';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
@@ -336,6 +336,10 @@ async function loadAccounts() {
         container.innerHTML = accounts.map(account => {
             const idEsc = escapeAttr(account.id);
             const labelEsc = escapeAttr(account.label || '');
+            const profileLabels = { standby: '待首次使用', refreshing: '正在续期', ready: '已就绪', error: '续期失败' };
+            const profileStatus = account.browser_profile_status || 'standby';
+            const profileText = profileLabels[profileStatus] || profileStatus;
+            const profileDetail = account.browser_profile_error || (account.browser_profile_updated_at ? `最近更新 ${new Date(account.browser_profile_updated_at).toLocaleString('zh-CN', { hour12: false })}` : `Profile ${account.browser_profile_id || account.id}`);
             return `
             <div class="account-card">
                 <div class="account-card-header">
@@ -361,12 +365,20 @@ async function loadAccounts() {
                     <span class="label">${t('accounts.models')}</span>
                     <span class="value">${(account.models || []).length || account.models_count || 0}</span>
                 </div>
+                <div class="account-browser-profile">
+                    <i class="fas fa-earth-asia"></i>
+                    <b>浏览器 Profile <span class="browser-profile-chip ${escapeAttr(profileStatus)}">${escapeHtml(profileText)}</span></b>
+                    <small title="${escapeAttr(profileDetail)}">${escapeHtml(profileDetail)}</small>
+                </div>
                 <div class="account-actions">
                     <button class="btn btn-sm btn-outline acc-check-btn" data-account-id="${idEsc}">
                         <i class="fas fa-heartbeat"></i> ${t('accounts.check')}
                     </button>
                     <button class="btn btn-sm btn-outline acc-cookie-btn" data-account-id="${idEsc}" data-account-label="${labelEsc}">
                         <i class="fas fa-cookie-bite"></i> ${t('accounts.updateCookie')}
+                    </button>
+                    <button class="btn btn-sm btn-outline acc-browser-btn" data-account-id="${idEsc}">
+                        <i class="fas fa-earth-asia"></i> 浏览器续期
                     </button>
                     <button class="btn btn-sm btn-danger acc-remove-btn" data-account-id="${idEsc}">
                         <i class="fas fa-trash"></i> ${t('accounts.delete')}
@@ -382,6 +394,9 @@ async function loadAccounts() {
         });
         container.querySelectorAll('.acc-cookie-btn').forEach(btn => {
             btn.addEventListener('click', () => openUpdateCookieModal(btn.dataset.accountId, btn.dataset.accountLabel || ''));
+        });
+        container.querySelectorAll('.acc-browser-btn').forEach(btn => {
+            btn.addEventListener('click', () => refreshAccountBrowser(btn.dataset.accountId));
         });
         container.querySelectorAll('.acc-remove-btn').forEach(btn => {
             btn.addEventListener('click', () => removeAccount(btn.dataset.accountId));
@@ -401,6 +416,19 @@ async function checkAccount(accountId) {
         await loadDashboard();
     } catch (error) {
         showToast(`${t('accounts.checkFailed')}: ${error.message}`, 'error');
+    }
+}
+
+async function refreshAccountBrowser(accountId) {
+    try {
+        showToast('正在通过内置浏览器续期，请稍候…', 'info');
+        await apiCall('POST', `/admin/accounts/${accountId}/browser-refresh`);
+        showToast('浏览器 Profile 已获取并热更新 Cookie', 'success');
+        await loadAccounts();
+        await loadDashboard();
+    } catch (error) {
+        showToast(`浏览器续期失败: ${error.message}`, 'error');
+        await loadAccounts();
     }
 }
 

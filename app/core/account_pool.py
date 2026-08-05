@@ -2,6 +2,7 @@ import json
 import time
 import asyncio
 import logging
+import httpx
 from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -64,6 +65,9 @@ class Account:
     cooldown_until: float = 0.0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     client: GeminiWebClient | None = field(default=None, repr=False)
+    browser_profile_status: str = "standby"
+    browser_profile_updated_at: str | None = None
+    browser_profile_error: str = ""
 
 
 class AccountPool:
@@ -82,6 +86,7 @@ class AccountPool:
         self._acquire_timeout = settings.acquire_timeout
         # 持有后台 fire-and-forget task 的强引用，防止被 GC 中途回收
         self._bg_tasks: set = set()
+        self._browser_refresh_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def accounts(self) -> list[Account]:
@@ -159,15 +164,26 @@ class AccountPool:
         self._accounts.append(account)
 
     async def _init_account_client(self, account: Account):
-        client = GeminiWebClient(psid=account.psid, psidts=account.psidts)
-        await client.initialize()
+        async def refresh_profile() -> bool:
+            return bool((await self._refresh_account_browser(account)).get("success"))
+
+        client = GeminiWebClient(
+            psid=account.psid,
+            psidts=account.psidts,
+            browser_refresh=refresh_profile,
+        )
         account.client = client
+        await client.initialize()
         if client.is_healthy:
             account.status = AccountStatus.ACTIVE
             logger.info(f"Account {account.id} ({account.label}) initialized")
         else:
             account.status = AccountStatus.EXPIRED
             logger.warning(f"Account {account.id} ({account.label}) failed to initialize")
+            if settings.browser_refresh_enabled:
+                task = asyncio.create_task(self._refresh_account_browser(account))
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
 
     def _find_available(self, exclude: set | None = None) -> Account | None:
         """在已持有 self._cond 锁的前提下，挑一个未满载的 ACTIVE 账号；没有则返回 None。
@@ -327,6 +343,76 @@ class AccountPool:
                 return True
         return False
 
+    async def _request_browser_profile(self, account: Account) -> dict:
+        psid, psidts = account.client.cookie_credentials
+        key = settings.admin_api_key or settings.api_key
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        async with httpx.AsyncClient(timeout=settings.browser_refresh_timeout) as client:
+            response = await client.post(
+                f"{settings.browser_refresher_url.rstrip('/')}/refresh",
+                json={
+                    "account_id": account.id,
+                    "label": account.label,
+                    "psid": psid,
+                    "psidts": psidts,
+                },
+                headers=headers,
+            )
+        if response.status_code != 200:
+            try:
+                message = response.json().get("error")
+            except Exception:
+                message = response.text
+            raise RuntimeError(str(message or f"Browser refresher HTTP {response.status_code}")[:300])
+        data = response.json()
+        if not data.get("psid") or not data.get("psidts"):
+            raise RuntimeError("Browser profile did not return login cookies")
+        return data
+
+    async def _refresh_account_browser(self, account: Account) -> dict:
+        if not settings.browser_refresh_enabled:
+            return {"success": False, "error": "Built-in browser refresh is disabled"}
+        if not account.client:
+            return {"success": False, "error": "Account client not initialized"}
+
+        lock = self._browser_refresh_locks.setdefault(account.id, asyncio.Lock())
+        async with lock:
+            account.browser_profile_status = "refreshing"
+            account.browser_profile_error = ""
+            was_healthy = account.client.is_healthy
+            account.status = AccountStatus.REFRESHING
+            try:
+                data = await self._request_browser_profile(account)
+                result = await account.client.reload_cookies(data["psid"], data["psidts"])
+                if not result.get("success"):
+                    raise RuntimeError(result.get("error", "Refreshed cookies were rejected"))
+                account.psid = data["psid"]
+                account.psidts = data["psidts"]
+                account.status = AccountStatus.ACTIVE
+                account.consecutive_failures = 0
+                account.browser_profile_status = "ready"
+                account.browser_profile_updated_at = data.get("updated_at") or datetime.now(timezone.utc).isoformat()
+                self._save_to_file()
+                logger.info("Account %s refreshed from built-in browser profile", account.id)
+                return {
+                    "success": True,
+                    "profile_id": account.id,
+                    "updated_at": account.browser_profile_updated_at,
+                }
+            except Exception as e:
+                error = str(e)[:300]
+                account.status = AccountStatus.ACTIVE if was_healthy else AccountStatus.EXPIRED
+                account.browser_profile_status = "error"
+                account.browser_profile_error = error
+                logger.warning("Account %s browser profile refresh failed: %s", account.id, error)
+                return {"success": False, "profile_id": account.id, "error": error}
+
+    async def refresh_account_browser(self, account_id: str) -> dict:
+        account = self._get_account(account_id)
+        if account is None:
+            raise ValueError(f"Account {account_id} not found")
+        return await self._refresh_account_browser(account)
+
     async def check_account(self, account_id: str) -> dict:
         for account in self._accounts:
             if account.id == account_id:
@@ -444,6 +530,10 @@ class AccountPool:
                 "cooling_down": a.cooldown_until > asyncio.get_event_loop().time(),
                 "models": self.models if a.client else [],
                 "models_count": len(self.models) if a.client else 0,
+                "browser_profile_id": a.id,
+                "browser_profile_status": a.browser_profile_status,
+                "browser_profile_updated_at": a.browser_profile_updated_at,
+                "browser_profile_error": a.browser_profile_error,
             })
         return {
             "total": self.total_count,

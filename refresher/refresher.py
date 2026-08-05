@@ -9,6 +9,11 @@ import os
 import sys
 import json
 import time
+import re
+import hashlib
+import threading
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import requests as http_requests
 from playwright.sync_api import sync_playwright
 
@@ -29,6 +34,11 @@ if _interval_seconds is not None:
 else:
     REFRESH_INTERVAL = int(float(os.environ.get("REFRESH_INTERVAL", "8")) * 60)
 SINGLE_RUN = os.environ.get("SINGLE_RUN", "false").lower() == "true"
+REFRESHER_MODE = os.environ.get("REFRESHER_MODE", "scheduled").lower()
+REFRESHER_PORT = int(os.environ.get("REFRESHER_PORT", "6080"))
+PROFILE_DIR = os.path.join(DATA_DIR, "browser_profiles")
+PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_profile_lock = threading.Lock()
 
 
 def load_accounts():
@@ -212,11 +222,136 @@ def refresh_all():
     print(f"\n  Summary: {len(active)}/{len(results)} accounts active")
 
 
+def refresh_profile(account):
+    """Use one persistent Chromium user-data directory per account."""
+    account_id = str(account.get("account_id", ""))
+    psid = str(account.get("psid", "")).strip()
+    psidts = str(account.get("psidts", "")).strip()
+    if not PROFILE_ID_RE.fullmatch(account_id):
+        raise ValueError("Invalid account_id")
+    if not psid:
+        raise ValueError("Missing __Secure-1PSID")
+
+    profile_dir = os.path.join(PROFILE_DIR, account_id)
+    meta_path = os.path.join(profile_dir, "gemini2api-profile.json")
+    os.makedirs(profile_dir, exist_ok=True)
+    with _profile_lock, sync_playwright() as p:
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            headless=True,
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+            ],
+        )
+        try:
+            # Keep the persistent account profile, but seed only the two
+            # required auth cookies on every run. Stale Google challenge
+            # cookies can otherwise leave a healthy account on a login page.
+            context.clear_cookies()
+            cookies = [{
+                "name": "__Secure-1PSID", "value": psid, "domain": ".google.com",
+                "path": "/", "secure": True, "httpOnly": True, "sameSite": "None",
+            }]
+            if psidts:
+                cookies.append({
+                    "name": "__Secure-1PSIDTS", "value": psidts, "domain": ".google.com",
+                    "path": "/", "secure": True, "httpOnly": True, "sameSite": "None",
+                })
+            context.add_cookies(cookies)
+
+            page = context.pages[0] if context.pages else context.new_page()
+            body = ""
+            for attempt in range(2):
+                if attempt == 0:
+                    page.goto("https://gemini.google.com/app?hl=en", timeout=90000, wait_until="domcontentloaded")
+                else:
+                    page.reload(timeout=90000, wait_until="domcontentloaded")
+                page.wait_for_timeout(10000)
+                body = page.content()
+                if '"SNlM0e":"' in body:
+                    break
+            cookies = context.cookies()
+            fresh_psid = next((c["value"] for c in cookies if c["name"] == "__Secure-1PSID"), "")
+            fresh_psidts = next((c["value"] for c in cookies if c["name"] == "__Secure-1PSIDTS"), "")
+            if not fresh_psid or not fresh_psidts or '"SNlM0e":"' not in body:
+                raise RuntimeError("Browser profile is not signed in to Gemini")
+            updated_at = datetime.now(timezone.utc).isoformat()
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "profile_id": account_id,
+                    "psid_hash": hashlib.sha256(fresh_psid.encode()).hexdigest(),
+                    "updated_at": updated_at,
+                }, f, ensure_ascii=False, indent=2)
+            return {
+                "success": True,
+                "profile_id": account_id,
+                "psid": fresh_psid,
+                "psidts": fresh_psidts,
+                "updated_at": updated_at,
+            }
+        finally:
+            context.close()
+
+
+class RefreshHandler(BaseHTTPRequestHandler):
+    def _json(self, status, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/health":
+            self._json(200, {"status": "ok", "service": "browser-refresher"})
+        else:
+            self._json(404, {"error": "Not found"})
+
+    def do_POST(self):
+        if self.path != "/refresh":
+            self._json(404, {"error": "Not found"})
+            return
+        expected = ADMIN_KEY
+        supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if expected and supplied != expected:
+            self._json(401, {"error": "Unauthorized"})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= 1024 * 1024:
+                raise ValueError("Invalid request size")
+            payload = json.loads(self.rfile.read(size))
+            self._json(200, refresh_profile(payload))
+        except ValueError as e:
+            self._json(400, {"error": str(e)[:300]})
+        except Exception as e:
+            self._json(503, {"error": str(e)[:300]})
+
+    def log_message(self, fmt, *args):
+        print("[browser-refresher] " + fmt % args)
+
+
+def serve():
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    server = ThreadingHTTPServer(("0.0.0.0", REFRESHER_PORT), RefreshHandler)
+    print(f"Built-in browser refresher listening on :{REFRESHER_PORT}")
+    server.serve_forever()
+
+
 if __name__ == "__main__":
     if SINGLE_RUN:
         refresh_all()
         print("\n[Single run mode] Done, exiting.")
         sys.exit(0)
+    elif REFRESHER_MODE == "server":
+        serve()
 
     print(f"Gemini Cookie Refresher started (interval: {REFRESH_INTERVAL}s; set REFRESH_INTERVAL in minutes)")
     while True:

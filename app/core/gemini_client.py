@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from threading import Lock
 from collections import deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 from curl_cffi.requests import AsyncSession
@@ -332,7 +333,8 @@ def _rand_reqid() -> int:
 
 
 class GeminiWebClient:
-    def __init__(self, psid: str | None = None, psidts: str | None = None):
+    def __init__(self, psid: str | None = None, psidts: str | None = None,
+                 browser_refresh: Callable[[], Awaitable[bool]] | None = None):
         self._psid = psid or settings.gemini_psid
         self._psidts = psidts or settings.gemini_psidts
         self._session_token: str = ""
@@ -356,6 +358,8 @@ class GeminiWebClient:
         self._check_history: deque[dict] = deque(maxlen=20)
         self._last_check_result: dict | None = None
         self._last_reload_error: str = ""
+        self._browser_refresh = browser_refresh
+        self._browser_refresh_lock = asyncio.Lock()
 
     async def initialize(self):
         fingerprint_config.load()
@@ -411,6 +415,10 @@ class GeminiWebClient:
     @property
     def check_history(self) -> list[dict]:
         return list(self._check_history)
+
+    @property
+    def cookie_credentials(self) -> tuple[str, str]:
+        return self._psid, self._psidts
 
     async def _ensure_session_current(self):
         """检查 impersonate 目标是否需要更新（指纹轮换时换 session）。
@@ -486,6 +494,25 @@ class GeminiWebClient:
                 "checked_at": now,
                 "error": str(e),
             }
+
+        error = str(result.get("error", "")).lower()
+        refreshable = not error or any(marker in error for marker in (
+            "401", "403", "cookie", "login", "token", "redirect",
+        ))
+        if not result["valid"] and refreshable and self._browser_refresh:
+            try:
+                async with self._browser_refresh_lock:
+                    refreshed = await self._browser_refresh()
+                if refreshed:
+                    result = {
+                        "valid": True,
+                        "has_token": True,
+                        "models_count": len(self._available_models),
+                        "checked_at": now,
+                        "browser_refreshed": True,
+                    }
+            except Exception as e:
+                logger.warning("Browser profile refresh failed: %s", e)
 
         self._last_check_result = result
         self._check_history.append(result)

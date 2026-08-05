@@ -97,6 +97,8 @@
 .patrol-task-images img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: var(--bg-tertiary); }
 .patrol-task-images figcaption, .patrol-task-image-missing { padding: 0.5rem 0.6rem; color: var(--text-secondary); font-size: 0.72rem; overflow-wrap: anywhere; }
 .patrol-task-image-missing { display: flex; align-items: center; gap: 0.4rem; min-height: 52px; border: 1px dashed var(--border-color); border-radius: var(--radius-lg); }
+.patrol-task-full-response { overflow: visible; margin: 0; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); color: var(--text-primary); font: inherit; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.patrol-response-note { display: block; margin-top: 0.45rem; color: var(--warning-color); }
 .patrol-ok { color: var(--success-color); font-weight: 700; }
 .patrol-bad { color: var(--danger-color); font-weight: 700; }
 .patrol-empty { display: grid; place-items: center; min-height: 200px; color: var(--text-tertiary); }
