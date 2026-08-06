@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#07110f">
+    <title>Gemini2API · API 调试台</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --ink: #e9f3ef;
+            --muted: #82978f;
+            --dim: #52645d;
+            --bg: #07110f;
+            --surface: #0c1714;
+            --surface-2: #101e1a;
+            --surface-3: #14251f;
+            --line: #20362f;
+            --line-hot: #3b6658;
+            --signal: #65f2bd;
+            --signal-2: #12c98a;
+            --cyan: #62d7f4;
+            --amber: #f5bc5c;
+            --danger: #ff746f;
+            --radius: 14px;
+            --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+            --sans: Bahnschrift, "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+        html { min-width: 320px; background: var(--bg); }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--ink);
+            font-family: var(--sans);
+            background:
+                radial-gradient(circle at 82% -10%, rgba(18,201,138,.12), transparent 30%),
+                radial-gradient(circle at -10% 75%, rgba(98,215,244,.07), transparent 28%),
+                var(--bg);
+        }
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            opacity: .13;
+            background-image: linear-gradient(rgba(101,242,189,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(101,242,189,.09) 1px, transparent 1px);
+            background-size: 48px 48px;
+            mask-image: linear-gradient(to bottom, #000, transparent 70%);
+        }
+        button, input, textarea, select { font: inherit; }
+        button { color: inherit; cursor: pointer; }
+        button:disabled { cursor: not-allowed; opacity: .48; }
+        a { color: inherit; }
+        :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+        ::selection { color: #04110c; background: var(--signal); }
+        ::-webkit-scrollbar { width: 9px; height: 9px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 10px; background: #2b443b; background-clip: content-box; }
+
+        .shell { position: relative; z-index: 1; min-height: 100vh; }
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            min-height: 78px;
+            display: grid;
+            grid-template-columns: auto minmax(320px, 1fr) auto;
+            align-items: center;
+            gap: 24px;
+            padding: 14px 22px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(7,17,15,.88);
+            backdrop-filter: blur(22px);
+        }
+        .brand { display: flex; align-items: center; gap: 12px; min-width: 230px; text-decoration: none; }
+        .brand-mark {
+            position: relative;
+            width: 44px;
+            height: 44px;
+            display: grid;
+            place-items: center;
+            border: 1px solid var(--line-hot);
+            border-radius: 13px;
+            background: #0b1b16;
+            color: var(--signal);
+            font-family: var(--mono);
+            font-size: 13px;
+            font-weight: 800;
+            box-shadow: inset 0 0 22px rgba(101,242,189,.08), 0 8px 30px rgba(0,0,0,.25);
+        }
+        .brand-mark::after {
+            content: "";
+            position: absolute;
+            right: -3px;
+            top: -3px;
+            width: 8px;
+            height: 8px;
+            border: 2px solid var(--bg);
+            border-radius: 50%;
+            background: var(--signal);
+            box-shadow: 0 0 12px var(--signal);
+        }
+        .brand strong { display: block; font-size: 16px; letter-spacing: .02em; }
+        .brand small { display: block; margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+        .connection { display: grid; grid-template-columns: minmax(210px, 1.3fr) minmax(180px, 1fr); gap: 10px; }
+        .compact-field { position: relative; min-width: 0; }
+        .compact-field label {
+            position: absolute;
+            top: 7px;
+            left: 12px;
+            z-index: 1;
+            color: var(--dim);
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            pointer-events: none;
+        }
+        .input, .textarea, .select {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            background: rgba(12,23,20,.9);
+            color: var(--ink);
+            transition: border-color .18s, background .18s, box-shadow .18s;
+        }
+        .input:hover, .textarea:hover, .select:hover { border-color: #304d43; }
+        .input:focus, .textarea:focus, .select:focus { border-color: var(--line-hot); background: var(--surface-2); box-shadow: 0 0 0 3px rgba(101,242,189,.08); outline: 0; }
+        .compact-field .input { height: 50px; padding: 21px 40px 6px 12px; font-family: var(--mono); font-size: 11px; }
+        .key-toggle { position: absolute; right: 8px; top: 13px; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+        .key-toggle:hover { color: var(--signal); background: var(--surface-3); }
+        .top-actions { display: flex; align-items: center; gap: 8px; }
+        .button {
+            min-height: 38px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            padding: 0 13px;
+            background: var(--surface-2);
+            color: var(--ink);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .02em;
+            transition: transform .16s, border-color .16s, background .16s;
+        }
+        .button:hover { transform: translateY(-1px); border-color: var(--line-hot); background: var(--surface-3); }
+        .button svg { width: 15px; height: 15px; }
+        .button.primary { border-color: transparent; background: var(--signal); color: #062017; box-shadow: 0 10px 28px rgba(18,201,138,.18); }
+        .button.primary:hover { background: #8bf7cf; }
+        .button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+        .button.ghost:hover { color: var(--ink); background: var(--surface-2); }
+
+        .workspace {
+            width: min(1880px, 100%);
+            min-height: calc(100vh - 79px);
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 264px minmax(480px, 1fr) minmax(390px, 34vw);
+        }
+        .pane { min-width: 0; border-right: 1px solid var(--line); background: rgba(7,17,15,.5); }
+        .pane:last-child { border-right: 0; }
+        .pane-head {
+            height: 66px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0 16px;
+            border-bottom: 1px solid var(--line);
+        }
+        .pane-kicker { color: var(--signal); font-family: var(--mono); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+        .pane-title { margin: 4px 0 0; font-size: 13px; font-weight: 700; }
+        .counter, .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 24px;
+            padding: 3px 8px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--surface-2);
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 9px;
+            font-weight: 700;
+        }
+        .pill.ok { border-color: rgba(101,242,189,.25); color: var(--signal); background: rgba(101,242,189,.07); }
+        .pill.warn { border-color: rgba(245,188,92,.25); color: var(--amber); background: rgba(245,188,92,.07); }
+        .pill.bad { border-color: rgba(255,116,111,.25); color: var(--danger); background: rgba(255,116,111,.07); }
+
+        .model-tools { padding: 12px; border-bottom: 1px solid var(--line); }
+        .search { height: 40px; padding: 0 12px; font-size: 11px; }
+        .model-list { height: calc(100vh - 199px); overflow-y: auto; padding: 8px; }
+        .model-card {
+            width: 100%;
+            margin: 0 0 7px;
+            padding: 13px 12px;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            background: transparent;
+            text-align: left;
+            transition: border-color .16s, background .16s, transform .16s;
+        }
+        .model-card:hover { border-color: var(--line); background: var(--surface); transform: translateX(2px); }
+        .model-card.active { border-color: var(--line-hot); background: linear-gradient(90deg, rgba(101,242,189,.09), rgba(101,242,189,.025)); }
+        .model-index { float: right; color: var(--dim); font-family: var(--mono); font-size: 9px; }
+        .model-name { display: block; overflow-wrap: anywhere; color: var(--ink); font-family: var(--mono); font-size: 11px; font-weight: 750; line-height: 1.45; }
+        .model-card.active .model-name { color: var(--signal); }
+        .model-desc { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+        .model-tags { margin-top: 9px; display: flex; gap: 5px; flex-wrap: wrap; }
+        .model-tag { padding: 3px 6px; border-radius: 6px; background: var(--surface-3); color: var(--muted); font-family: var(--mono); font-size: 8px; font-weight: 700; }
+
+        .scroll { height: calc(100vh - 145px); overflow-y: auto; }
+        .section { padding: 18px; border-bottom: 1px solid var(--line); }
+        .section-title { margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 11px; }
+        .section-title span:first-child { color: var(--muted); font-weight: 700; letter-spacing: .04em; }
+        .protocol { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: #07110f; }
+        .protocol button { height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 750; }
+        .protocol button.active { background: var(--surface-3); color: var(--signal); box-shadow: inset 0 0 0 1px var(--line-hot); }
+        .selection { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+        .selection code { color: var(--signal); font-family: var(--mono); font-size: 13px; font-weight: 800; overflow-wrap: anywhere; }
+        .selection p { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .field { min-width: 0; }
+        .field.wide { grid-column: 1 / -1; }
+        .field label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 7px; color: var(--muted); font-size: 10px; font-weight: 700; }
+        .field label small { color: var(--dim); font-family: var(--mono); font-size: 8px; }
+        .textarea { min-height: 122px; resize: vertical; padding: 12px; font-size: 12px; line-height: 1.6; }
+        .select, .field > .input { height: 40px; padding: 0 11px; font-size: 11px; }
+        .templates { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        .template { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; background: transparent; color: var(--muted); font-size: 9px; }
+        .template:hover { border-color: var(--line-hot); color: var(--signal); }
+        .dropzone {
+            min-height: 94px;
+            display: grid;
+            place-items: center;
+            padding: 15px;
+            border: 1px dashed #315247;
+            border-radius: 13px;
+            background: rgba(101,242,189,.025);
+            text-align: center;
+            transition: border-color .18s, background .18s;
+        }
+        .dropzone.drag { border-color: var(--signal); background: rgba(101,242,189,.07); }
+        .dropzone input { display: none; }
+        .dropzone strong { display: block; font-size: 11px; }
+        .dropzone span { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; }
+        .dropzone b { color: var(--signal); font-weight: 700; }
+        .file-list { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(122px, 1fr)); gap: 8px; }
+        .file-card { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+        .file-card img { width: 100%; height: 78px; display: block; object-fit: cover; background: #050b09; }
+        .file-meta { padding: 7px; }
+        .file-meta strong, .file-meta span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .file-meta strong { font-size: 9px; }
+        .file-meta span { margin-top: 3px; color: var(--muted); font-size: 8px; }
+        .file-remove { position: absolute; right: 5px; top: 5px; width: 24px; height: 24px; border: 1px solid rgba(255,255,255,.16); border-radius: 8px; background: rgba(5,11,9,.78); color: #fff; font-size: 14px; }
+
+        .endpoint { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 11px; background: #06100d; }
+        .method { flex: 0 0 auto; padding: 3px 6px; border-radius: 5px; background: var(--signal); color: #062017; font-family: var(--mono); font-size: 8px; font-weight: 900; }
+        .endpoint code { min-width: 0; color: #b8cbc4; font-family: var(--mono); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+        .tabs { display: flex; gap: 3px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+        .tabs button { height: 39px; border: 0; border-bottom: 2px solid transparent; padding: 0 10px; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; }
+        .tabs button.active { border-bottom-color: var(--signal); color: var(--signal); }
+        .code-wrap { position: relative; background: #050c0a; }
+        pre { margin: 0; color: #b9d5ca; font-family: var(--mono); font-size: 10px; line-height: 1.62; tab-size: 2; }
+        .code-output { min-height: 230px; max-height: 430px; padding: 16px; overflow: auto; white-space: pre; }
+        .copy { position: absolute; right: 10px; top: 10px; z-index: 2; min-height: 29px; border-color: #29483e; background: #0d1c17; }
+        .send-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        .send-note { color: var(--muted); font-size: 9px; line-height: 1.5; }
+        .send-button { min-width: 145px; min-height: 44px; }
+        .spinner { width: 14px; height: 14px; display: none; border: 2px solid rgba(6,32,23,.25); border-top-color: #062017; border-radius: 50%; animation: spin .75s linear infinite; }
+        .loading .spinner { display: block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
+        .metric { min-width: 0; padding: 13px 14px; border-right: 1px solid var(--line); }
+        .metric:last-child { border-right: 0; }
+        .metric span { display: block; color: var(--dim); font-family: var(--mono); font-size: 8px; letter-spacing: .1em; text-transform: uppercase; }
+        .metric strong { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+        .status-ok { color: var(--signal); }
+        .status-bad { color: var(--danger); }
+        .answer { margin: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+        .answer-label { color: var(--signal); font-family: var(--mono); font-size: 8px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+        .answer-text { margin-top: 9px; color: var(--ink); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .response-empty { min-height: 330px; display: grid; place-items: center; padding: 30px; text-align: center; }
+        .radar { position: relative; width: 70px; height: 70px; margin: 0 auto 16px; border: 1px solid var(--line-hot); border-radius: 50%; opacity: .72; }
+        .radar::before, .radar::after { content: ""; position: absolute; inset: 50% auto auto 50%; background: var(--line-hot); transform: translate(-50%,-50%); }
+        .radar::before { width: 1px; height: 100%; }
+        .radar::after { width: 100%; height: 1px; }
+        .radar i { position: absolute; inset: 7px; border-radius: 50%; background: conic-gradient(from 10deg, transparent 0 72%, rgba(101,242,189,.28)); animation: radar 2.8s linear infinite; }
+        @keyframes radar { to { transform: rotate(360deg); } }
+        .response-empty p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
+        .error { margin: 14px; padding: 12px; border: 1px solid rgba(255,116,111,.28); border-radius: 11px; background: rgba(255,116,111,.07); color: #ffaaa6; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+        .media-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 9px; padding: 14px; border-bottom: 1px solid var(--line); }
+        .media { overflow: hidden; margin: 0; border: 1px solid var(--line); border-radius: 11px; background: #030806; }
+        .media img { width: 100%; max-height: 320px; display: block; object-fit: contain; }
+        .media figcaption { padding: 7px 9px; display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 8px; }
+        .raw-head { height: 39px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 9px; }
+        .response-code { min-height: 300px; max-height: calc(100vh - 285px); padding: 16px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #050c0a; }
+        .hidden { display: none !important; }
+        .toast { position: fixed; right: 20px; bottom: 20px; z-index: 80; max-width: min(380px, calc(100vw - 40px)); padding: 11px 14px; border: 1px solid var(--line-hot); border-radius: 11px; background: #10221c; color: var(--ink); box-shadow: 0 18px 50px rgba(0,0,0,.4); font-size: 10px; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity .18s, transform .18s; }
+        .toast.show { opacity: 1; transform: translateY(0); }
+
+        @media (max-width: 1260px) {
+            .topbar { grid-template-columns: auto 1fr; }
+            .top-actions { grid-column: 1 / -1; justify-content: flex-end; }
+            .workspace { grid-template-columns: 245px minmax(450px, 1fr); }
+            .response-pane { grid-column: 1 / -1; border-top: 1px solid var(--line); }
+            .response-pane .scroll { height: auto; max-height: 760px; }
+        }
+        @media (max-width: 790px) {
+            .topbar { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+            .connection { grid-template-columns: 1fr; }
+            .top-actions { justify-content: stretch; }
+            .top-actions .button { flex: 1; }
+            .workspace { display: block; }
+            .pane { border-right: 0; border-bottom: 1px solid var(--line); }
+            .model-list { height: auto; max-height: 330px; }
+            .scroll { height: auto; max-height: none; }
+            .form-grid { grid-template-columns: 1fr; }
+            .field.wide { grid-column: auto; }
+            .send-row { align-items: stretch; flex-direction: column; }
+            .send-button { width: 100%; }
+            .code-output, .response-code { max-height: 520px; }
+        }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <header class="topbar">
+        <a class="brand" href="/index.html" title="返回管理控制台">
+            <span class="brand-mark">G2</span>
+            <span><strong>Gemini2API Lab</strong><small>request engineering console</small></span>
+        </a>
+        <div class="connection">
+            <div class="compact-field"><label for="baseUrl">Base URL</label><input id="baseUrl" class="input" spellcheck="false"></div>
+            <div class="compact-field"><label for="apiKey">API Key · 仅保留在当前页面</label><input id="apiKey" class="input" type="password" autocomplete="off" placeholder="输入 API Key"><button id="keyToggle" class="key-toggle" type="button" aria-label="显示或隐藏 API Key">◉</button></div>
+        </div>
+        <div class="top-actions">
+            <button id="loadModels" class="button" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 0 0-15-3M4 4v5h5M4 13a8 8 0 0 0 15 3m1 4v-5h-5"/></svg>
+                同步模型
+            </button>
+            <a class="button ghost" href="/index.html">返回控制台</a>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <aside class="pane model-pane">
+            <div class="pane-head"><div><div class="pane-kicker">01 / Model</div><div class="pane-title">选择模型</div></div><span id="modelCount" class="counter">04</span></div>
+            <div class="model-tools"><input id="modelSearch" class="input search" placeholder="搜索模型 / 能力" aria-label="搜索模型"></div>
+            <div id="modelList" class="model-list"></div>
+        </aside>
+
+        <section class="pane builder-pane">
+            <div class="pane-head"><div><div class="pane-kicker">02 / Compose</div><div class="pane-title">构造请求</div></div><button id="reset" class="button ghost" type="button">重置</button></div>
+            <div class="scroll">
+                <div class="section">
+                    <div class="protocol" aria-label="API 协议">
+                        <button id="protocolOpenAI" class="active" type="button">OpenAI Compatible</button>
+                        <button id="protocolGemini" type="button">Gemini Native</button>
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="selection">
+                        <div><code id="selectedModel">gemini-flash</code><p id="selectedDescription">通用高速模型，适合文本与多图理解。</p></div>
+                        <span id="selectedBadge" class="pill ok">MULTIMODAL</span>
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="templates" aria-label="提示词模板">
+                        <button class="template" type="button" data-template="text">文本问答</button>
+                        <button class="template" type="button" data-template="vision">图片分析</button>
+                        <button class="template" type="button" data-template="count">多图计数</button>
+                        <button class="template" type="button" data-template="json">JSON 输出</button>
+                    </div>
+                    <div class="form-grid">
+                        <div class="field wide"><label for="systemPrompt"><span>系统提示词</span><small>OPTIONAL</small></label><input id="systemPrompt" class="input" placeholder="例如：你是一名严谨的图像分析助手"></div>
+                        <div class="field wide"><label for="prompt"><span>用户消息</span><small>REQUIRED</small></label><textarea id="prompt" class="textarea" placeholder="输入要发送给模型的内容">请用三句话说明当前服务是否运行正常。</textarea></div>
+                        <div class="field"><label for="temperature"><span>Temperature</span><small>0–2</small></label><input id="temperature" class="input" type="number" min="0" max="2" step="0.1" value="0.7"></div>
+                        <div class="field"><label for="maxTokens"><span>Max tokens</span><small>OPTIONAL</small></label><input id="maxTokens" class="input" type="number" min="1" step="1" placeholder="留空使用默认值"></div>
+                        <div class="field wide">
+                            <label for="imageInput"><span>图片附件</span><small id="imageCount">0 / 20</small></label>
+                            <label id="dropzone" class="dropzone" for="imageInput"><input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple><span><strong>拖入或点击选择图片</strong><span>支持 PNG / JPEG / GIF / WebP，最多 <b>20 张</b>，单张建议不超过 10 MB</span></span></label>
+                            <div id="fileList" class="file-list"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="section-title"><span>请求地址</span><span id="requestState" class="pill warn">待填写密钥</span></div>
+                    <div class="endpoint"><span class="method">POST</span><code id="endpoint">-</code></div>
+                </div>
+                <div class="section" style="padding:0">
+                    <div class="tabs">
+                        <button class="active" type="button" data-tab="json">JSON</button>
+                        <button type="button" data-tab="curl">cURL</button>
+                        <button type="button" data-tab="python">Python</button>
+                        <button type="button" data-tab="javascript">JavaScript</button>
+                    </div>
+                    <div class="code-wrap"><button id="copyCode" class="button copy" type="button">复制</button><pre id="codeOutput" class="code-output"></pre></div>
+                </div>
+                <div class="section">
+                    <div class="send-row">
+                        <div id="validation" class="send-note">填写 API Key 后即可发送请求。示例代码不会暴露真实密钥。</div>
+                        <button id="send" class="button primary send-button" type="button"><span class="spinner"></span><svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg><span id="sendText">发送请求</span></button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="pane response-pane">
+            <div class="pane-head"><div><div class="pane-kicker">03 / Inspect</div><div class="pane-title">检查响应</div></div><button id="clear" class="button ghost" type="button">清空</button></div>
+            <div class="scroll">
+                <div class="metrics">
+                    <div class="metric"><span>HTTP</span><strong id="httpStatus">—</strong></div>
+                    <div class="metric"><span>Latency</span><strong id="latency">—</strong></div>
+                    <div class="metric"><span>Images</span><strong id="mediaCount">—</strong></div>
+                </div>
+                <div id="responseEmpty" class="response-empty"><div><div class="radar"><i></i></div><p>发送请求后，这里会显示<br>模型回答、媒体预览和完整 JSON。</p></div></div>
+                <div id="errorBox" class="error hidden"></div>
+                <div id="answerBox" class="answer hidden"><div class="answer-label">Assistant output</div><div id="answerText" class="answer-text"></div></div>
+                <div id="mediaGrid" class="media-grid hidden"></div>
+                <div id="rawPanel" class="hidden"><div class="raw-head"><span>RAW RESPONSE</span><button id="copyResponse" class="button ghost" type="button">复制 JSON</button></div><pre id="responseCode" class="response-code"></pre></div>
+            </div>
+        </section>
+    </main>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+    const MAX_IMAGES = 20;
+    const CODE_API_KEY = 'YOUR_API_KEY';
+    const MODELS = [
+        {id:'gemini-flash', label:'Flash', description:'通用高速模型，适合文本与多图理解。', tags:['FAST','VISION']},
+        {id:'gemini-flash-lite', label:'Flash Lite', description:'更低延迟，适合巡检、分类与短回答。', tags:['LITE','LOW LATENCY']},
+        {id:'gemini-pro', label:'Pro', description:'复杂推理与高质量内容生成。', tags:['REASONING','QUALITY']},
+        {id:'gemini-flash-thinking', label:'Flash Thinking', description:'带思考能力的快速模型。', tags:['THINKING','VISION']}
+    ];
+    const TEMPLATES = {
+        text: '请用三句话说明当前服务是否运行正常。',
+        vision: '逐张分析这些图片的主体、环境与明显差异，并给出简洁结论。',
+        count: '请确认你收到了多少张图片，只回复图片数量。',
+        json: '请将结果以 JSON 返回，字段包含 summary、confidence 和 details。'
+    };
+    const state = {protocol:'openai', models:[...MODELS], selected:MODELS[0], files:[], fileData:[], tab:'json', loading:false, response:null, toastTimer:null};
+    const $ = id => document.getElementById(id);
+    const trimBase = value => String(value || '').trim().replace(/\/+$/, '');
+    const defaultBase = () => location.protocol.startsWith('http') ? location.origin : 'http://localhost:5918';
+
+    function escapeHtml(value){ return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])); }
+    function escapeAttr(value){ return escapeHtml(value).replace(/`/g, '&#96;'); }
+    function showToast(message){ const toast=$('toast'); toast.textContent=message; toast.classList.add('show'); clearTimeout(state.toastTimer); state.toastTimer=setTimeout(()=>toast.classList.remove('show'),2400); }
+    function formatBytes(bytes){ return bytes < 1048576 ? `${Math.max(1,Math.round(bytes/1024))} KB` : `${(bytes/1048576).toFixed(1)} MB`; }
+    function formatTime(ms){ return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms/1000).toFixed(2)} s`; }
+
+    function renderModels(){
+        const query=$('modelSearch').value.trim().toLowerCase();
+        const rows=state.models.filter(model => !query || `${model.id} ${model.label} ${model.description} ${model.tags.join(' ')}`.toLowerCase().includes(query));
+        $('modelCount').textContent=String(rows.length).padStart(2,'0');
+        $('modelList').innerHTML=rows.length ? rows.map((model,index)=>`<button class="model-card ${state.selected?.id===model.id?'active':''}" type="button" data-model="${escapeAttr(model.id)}"><span class="model-index">${String(index+1).padStart(2,'0')}</span><span class="model-name">${escapeHtml(model.id)}</span><span class="model-desc">${escapeHtml(model.description)}</span><span class="model-tags">${model.tags.map(tag=>`<span class="model-tag">${escapeHtml(tag)}</span>`).join('')}</span></button>`).join('') : '<div class="response-empty"><p>没有匹配的模型</p></div>';
+        document.querySelectorAll('[data-model]').forEach(button=>button.addEventListener('click',()=>selectModel(button.dataset.model)));
+    }
+    function selectModel(id){
+        const model=state.models.find(item=>item.id===id); if(!model) return;
+        state.selected=model;
+        $('selectedModel').textContent=model.id;
+        $('selectedDescription').textContent=model.description;
+        $('selectedBadge').textContent=model.tags.includes('THINKING')?'THINKING':'MULTIMODAL';
+        renderModels(); refresh();
+    }
+    async function loadModels(){
+        const base=trimBase($('baseUrl').value), key=$('apiKey').value.trim();
+        if(!base || !key){ showToast('请先填写服务地址和 API Key'); return; }
+        const button=$('loadModels'); button.disabled=true; button.textContent='同步中…';
+        try{
+            const response=await fetch(`${base}/v1/models`,{headers:{Authorization:`Bearer ${key}`}});
+            const body=await response.json().catch(()=>({}));
+            if(!response.ok) throw new Error(extractError(body)||`HTTP ${response.status}`);
+            const ids=(body.data||[]).map(item=>String(item.id||'')).filter(Boolean);
+            if(!ids.length) throw new Error('服务未返回模型');
+            state.models=ids.map(id=>MODELS.find(item=>item.id===id)||{id,label:id,description:'服务端可用模型',tags:['CUSTOM']});
+            selectModel(state.models.find(item=>item.id===state.selected?.id)?.id||state.models[0].id);
+            showToast(`已同步 ${state.models.length} 个模型`);
+        }catch(error){ showToast(`同步失败：${error.message}`); }
+        finally{ button.disabled=false; button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 0 0-15-3M4 4v5h5M4 13a8 8 0 0 0 15 3m1 4v-5h-5"/></svg>同步模型'; }
+    }
+
+    function setProtocol(protocol){ state.protocol=protocol; $('protocolOpenAI').classList.toggle('active',protocol==='openai'); $('protocolGemini').classList.toggle('active',protocol==='gemini'); refresh(); }
+    function readFile(file){ return new Promise((resolve,reject)=>{ const reader=new FileReader(); reader.onload=()=>{ const dataUrl=String(reader.result||''), comma=dataUrl.indexOf(','); resolve({file,name:file.name,size:file.size,mime:file.type||'image/png',dataUrl,base64:comma>=0?dataUrl.slice(comma+1):''}); }; reader.onerror=()=>reject(new Error(`无法读取 ${file.name}`)); reader.readAsDataURL(file); }); }
+    async function addFiles(fileList){
+        const incoming=[...fileList].filter(file=>/^image\/(png|jpeg|gif|webp)$/.test(file.type));
+        const remaining=MAX_IMAGES-state.files.length;
+        if(!remaining){ showToast('最多支持 20 张图片'); return; }
+        const accepted=incoming.slice(0,remaining);
+        const tooLarge=accepted.find(file=>file.size>10*1024*1024);
+        if(tooLarge){ showToast(`${tooLarge.name} 超过 10 MB`); return; }
+        const data=await Promise.all(accepted.map(readFile));
+        state.files.push(...accepted); state.fileData.push(...data);
+        if(incoming.length>accepted.length) showToast(`已保留前 ${accepted.length} 张，总数最多 20 张`);
+        renderFiles(); refresh();
+    }
+    function renderFiles(){
+        $('imageCount').textContent=`${state.files.length} / ${MAX_IMAGES}`;
+        $('fileList').innerHTML=state.fileData.map((item,index)=>`<div class="file-card"><img src="${escapeAttr(item.dataUrl)}" alt="图片 ${index+1} 预览"><button class="file-remove" type="button" data-remove="${index}" aria-label="删除图片 ${index+1}">×</button><div class="file-meta"><strong>图 ${String(index+1).padStart(2,'0')} · ${escapeHtml(item.name)}</strong><span>${formatBytes(item.size)}</span></div></div>`).join('');
+        document.querySelectorAll('[data-remove]').forEach(button=>button.addEventListener('click',()=>{ const index=Number(button.dataset.remove); state.files.splice(index,1); state.fileData.splice(index,1); renderFiles(); refresh(); }));
+    }
+
+    function buildRequest(placeholders=false){
+        const base=trimBase($('baseUrl').value)||defaultBase();
+        const prompt=$('prompt').value.trim(), system=$('systemPrompt').value.trim();
+        const temperature=Number($('temperature').value), maxTokens=Number($('maxTokens').value);
+        const images=placeholders ? state.fileData.map((item,index)=>({...item,dataUrl:`data:${item.mime};base64,IMAGE_${index+1}_BASE64`,base64:`IMAGE_${index+1}_BASE64`})) : state.fileData;
+        if(state.protocol==='openai'){
+            const content=[]; if(prompt) content.push({type:'text',text:prompt}); images.forEach(image=>content.push({type:'image_url',image_url:{url:image.dataUrl}}));
+            const messages=[]; if(system) messages.push({role:'system',content:system}); messages.push({role:'user',content:images.length?content:prompt});
+            const payload={model:state.selected.id,messages,stream:false,temperature}; if(maxTokens>0) payload.max_tokens=maxTokens;
+            return {endpoint:`${base}/v1/chat/completions`,payload};
+        }
+        const parts=[]; if(prompt) parts.push({text:prompt}); images.forEach(image=>parts.push({inline_data:{mime_type:image.mime,data:image.base64}}));
+        const payload={contents:[{role:'user',parts}],generation_config:{temperature}}; if(system) payload.system_instruction=system; if(maxTokens>0) payload.generation_config.max_output_tokens=maxTokens;
+        return {endpoint:`${base}/v1beta/models/${encodeURIComponent(state.selected.id)}:generateContent`,payload};
+    }
+    function validate(){
+        if(!trimBase($('baseUrl').value)) return '请填写服务地址';
+        if(!$('apiKey').value.trim()) return '请填写 API Key';
+        if(!$('prompt').value.trim()) return '请填写用户消息';
+        const temperature=Number($('temperature').value); if(!Number.isFinite(temperature)||temperature<0||temperature>2) return 'Temperature 必须在 0 到 2 之间';
+        return '';
+    }
+    function refresh(){
+        const request=buildRequest(true), error=validate();
+        $('endpoint').textContent=request.endpoint;
+        $('requestState').textContent=error?'待完善':'READY'; $('requestState').className=`pill ${error?'warn':'ok'}`;
+        $('validation').textContent=error||`请求已就绪 · ${state.files.length} 张图片 · 示例代码使用安全占位密钥`;
+        $('send').disabled=Boolean(error)||state.loading;
+        renderCode();
+    }
+    function setTab(tab){ state.tab=tab; document.querySelectorAll('[data-tab]').forEach(button=>button.classList.toggle('active',button.dataset.tab===tab)); renderCode(); }
+    function renderCode(){
+        const request=buildRequest(true), body=JSON.stringify(request.payload,null,2);
+        let output=body;
+        if(state.tab==='curl') output=`curl --request POST '${request.endpoint}' \\\n  --header 'Authorization: Bearer ${CODE_API_KEY}' \\\n  --header 'Content-Type: application/json' \\\n  --data '${body.replace(/'/g,"'\\''")}'`;
+        if(state.tab==='python') output=`import json\nimport requests\n\nurl = ${JSON.stringify(request.endpoint)}\nheaders = {\n    "Authorization": "Bearer ${CODE_API_KEY}",\n    "Content-Type": "application/json",\n}\npayload = json.loads(${JSON.stringify(body)})\n\nresponse = requests.post(url, headers=headers, json=payload, timeout=300)\nresponse.raise_for_status()\nprint(response.json())`;
+        if(state.tab==='javascript') output=`const response = await fetch(${JSON.stringify(request.endpoint)}, {\n  method: "POST",\n  headers: {\n    "Authorization": "Bearer ${CODE_API_KEY}",\n    "Content-Type": "application/json"\n  },\n  body: JSON.stringify(${body})\n});\n\nif (!response.ok) throw new Error(await response.text());\nconsole.log(await response.json());`;
+        $('codeOutput').textContent=output;
+    }
+
+    async function sendRequest(){
+        const error=validate(); if(error){ showToast(error); return; }
+        const request=buildRequest(false), started=performance.now(); setLoading(true); clearResponse(false);
+        try{
+            const response=await fetch(request.endpoint,{method:'POST',headers:{Authorization:`Bearer ${$('apiKey').value.trim()}`,'Content-Type':'application/json'},body:JSON.stringify(request.payload)});
+            const text=await response.text(); let body; try{ body=JSON.parse(text); }catch{ body={raw:text}; }
+            renderResponse(response.status,performance.now()-started,body);
+        }catch(error){ renderResponse(0,performance.now()-started,{error:error.message}); }
+        finally{ setLoading(false); }
+    }
+    function setLoading(loading){ state.loading=loading; $('send').classList.toggle('loading',loading); $('sendText').textContent=loading?'请求进行中':'发送请求'; $('send').disabled=loading||Boolean(validate()); }
+    function assistantText(body){
+        const openai=body?.choices?.[0]?.message?.content; if(typeof openai==='string') return openai;
+        const parts=body?.candidates?.[0]?.content?.parts; if(Array.isArray(parts)) return parts.map(part=>part.text||'').filter(Boolean).join('\n');
+        return '';
+    }
+    function extractError(body){ if(!body) return ''; if(typeof body==='string') return body; if(typeof body.detail==='string') return body.detail; if(typeof body.error==='string') return body.error; return body.error?.message||body.message||''; }
+    function collectMedia(body){
+        const found=[], seen=new Set();
+        const add=url=>{ if(!url||seen.has(url)) return; if(/^(https?:\/\/|data:image\/|\/images\/)/i.test(url)){ seen.add(url); found.push(url); } };
+        const walk=value=>{ if(typeof value==='string'){ for(const match of value.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) add(match[1]); if(/^(https?:\/\/|data:image\/|\/images\/)/i.test(value)) add(value); return; } if(Array.isArray(value)){ value.forEach(walk); return; } if(value&&typeof value==='object') Object.values(value).forEach(walk); };
+        walk(body); return found;
+    }
+    function renderResponse(status,duration,body){
+        state.response=body; $('responseEmpty').classList.add('hidden'); $('rawPanel').classList.remove('hidden');
+        $('httpStatus').textContent=status?`${status} ${status>=200&&status<300?'OK':'ERROR'}`:'NETWORK'; $('httpStatus').className=status>=200&&status<300?'status-ok':'status-bad';
+        $('latency').textContent=formatTime(duration);
+        const error=extractError(body), answer=assistantText(body), media=collectMedia(body);
+        $('errorBox').classList.toggle('hidden',!error||status>=200&&status<300); $('errorBox').textContent=error;
+        $('answerBox').classList.toggle('hidden',!answer); $('answerText').textContent=answer;
+        $('mediaCount').textContent=String(media.length).padStart(2,'0');
+        $('mediaGrid').classList.toggle('hidden',!media.length); $('mediaGrid').innerHTML=media.map((url,index)=>`<figure class="media"><img src="${escapeAttr(url)}" alt="响应图片 ${index+1}"><figcaption><span>IMAGE ${String(index+1).padStart(2,'0')}</span><a href="${escapeAttr(url)}" target="_blank" rel="noopener">OPEN ↗</a></figcaption></figure>`).join('');
+        $('responseCode').textContent=JSON.stringify(body,null,2);
+    }
+    function clearResponse(reset=true){ state.response=null; $('responseEmpty').classList.remove('hidden'); $('errorBox').classList.add('hidden'); $('answerBox').classList.add('hidden'); $('mediaGrid').classList.add('hidden'); $('mediaGrid').innerHTML=''; $('rawPanel').classList.add('hidden'); if(reset){ $('httpStatus').textContent='—'; $('latency').textContent='—'; $('mediaCount').textContent='—'; } }
+    function resetBuilder(){ $('systemPrompt').value=''; $('prompt').value=TEMPLATES.text; $('temperature').value='0.7'; $('maxTokens').value=''; $('imageInput').value=''; state.files=[]; state.fileData=[]; renderFiles(); refresh(); }
+    async function copyText(text){ try{ await navigator.clipboard.writeText(text); }catch{ const area=document.createElement('textarea'); area.value=text; area.style.cssText='position:fixed;opacity:0'; document.body.append(area); area.select(); document.execCommand('copy'); area.remove(); } showToast('已复制到剪贴板'); }
+
+    $('baseUrl').value=defaultBase(); $('apiKey').value=localStorage.getItem('gemini2api_token')||'';
+    $('keyToggle').addEventListener('click',()=>{ $('apiKey').type=$('apiKey').type==='password'?'text':'password'; });
+    $('loadModels').addEventListener('click',loadModels); $('modelSearch').addEventListener('input',renderModels);
+    $('protocolOpenAI').addEventListener('click',()=>setProtocol('openai')); $('protocolGemini').addEventListener('click',()=>setProtocol('gemini'));
+    ['baseUrl','apiKey','systemPrompt','prompt','temperature','maxTokens'].forEach(id=>$(id).addEventListener('input',refresh));
+    document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>{ $('prompt').value=TEMPLATES[button.dataset.template]; refresh(); }));
+    document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>setTab(button.dataset.tab)));
+    $('imageInput').addEventListener('change',event=>addFiles(event.target.files));
+    const dropzone=$('dropzone'); ['dragenter','dragover'].forEach(type=>dropzone.addEventListener(type,event=>{ event.preventDefault(); dropzone.classList.add('drag'); })); ['dragleave','drop'].forEach(type=>dropzone.addEventListener(type,event=>{ event.preventDefault(); dropzone.classList.remove('drag'); })); dropzone.addEventListener('drop',event=>addFiles(event.dataTransfer.files));
+    $('copyCode').addEventListener('click',()=>copyText($('codeOutput').textContent)); $('copyResponse').addEventListener('click',()=>copyText($('responseCode').textContent));
+    $('send').addEventListener('click',sendRequest); $('clear').addEventListener('click',()=>clearResponse()); $('reset').addEventListener('click',resetBuilder);
+    renderModels(); selectModel(MODELS[0].id); renderFiles(); clearResponse(); refresh();
+</script>
+</body>
+</html>
