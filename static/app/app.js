@@ -4,7 +4,7 @@
 
 import { initializeComponents } from './component-loader.js';
 import { initThemeSwitcher } from './theme-switcher.js';
-import { initAuth, apiCall, logout } from './auth.js';
+import { initAuth, apiCall, logout } from './auth.js?v=2';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
 import { initPatrol, loadPatrol } from './patrol.js?v=8';
@@ -135,7 +135,6 @@ async function loadDashboard() {
         renderModelsList(modelsSet);
         updatePlaygroundModels(modelsSet);
         await loadSystemInfo();
-        await loadQrCards();
 
         // Bind and auto-check update button (must be after DOM is loaded)
         const updateBtn = document.getElementById('checkUpdateBtn');
@@ -184,51 +183,6 @@ async function loadSystemInfo() {
     } catch (error) {
         console.error('加载系统信息失败:', error);
     }
-}
-
-const QR_REMOTE_BASE = 'https://raw.githubusercontent.com/xwteam/gemini2api/main/api';
-
-async function loadQrCards() {
-    const container = document.getElementById('qrCardsContainer');
-    if (!container) return;
-    try {
-        const resp = await fetch(`${QR_REMOTE_BASE}/qr-config.json`);
-        if (!resp.ok) return;
-        const config = await resp.json();
-        // 安全：qr-config.json 来自第三方 GitHub 源（可被篡改/MITM），title/description/image
-        // 一律转义后再拼入 innerHTML；image 仅取相对路径片段并 encodeURIComponent，
-        // 同时对属性值用 escapeAttr 防止双引号逸出注入事件属性。
-        container.innerHTML = (config.cards || []).map(card => `
-            <div class="qr-card">
-                <p class="qr-title">${escapeHtml(card.title)}</p>
-                <img src="${QR_REMOTE_BASE}/${encodeURIComponent(String(card.image ?? ''))}" alt="${escapeAttr(card.title)}" class="qr-img" onclick="window.app.openLightbox(this.src)">
-                <p class="qr-desc">${escapeHtml(card.description)}</p>
-            </div>
-        `).join('');
-    } catch (e) {
-        console.error('加载二维码配置失败:', e);
-    }
-}
-
-function openLightbox(src) {
-    const overlay = document.getElementById('lightboxOverlay');
-    const img = document.getElementById('lightboxImage');
-    if (overlay && img) {
-        img.src = src;
-        overlay.classList.add('active');
-    }
-}
-
-function closeLightbox() {
-    const overlay = document.getElementById('lightboxOverlay');
-    if (overlay) overlay.classList.remove('active');
-}
-
-function initLightbox() {
-    const overlay = document.getElementById('lightboxOverlay');
-    const closeBtn = document.getElementById('lightboxClose');
-    if (overlay) overlay.addEventListener('click', (e) => { if (e.target === overlay) closeLightbox(); });
-    if (closeBtn) closeBtn.addEventListener('click', closeLightbox);
 }
 
 function renderAccountStatusGrid(accounts) {
@@ -445,6 +399,10 @@ async function loadAccounts() {
                     <div><span>__Secure-1PSID</span><code>${escapeHtml(account.psid || '未设置')}</code><button class="acc-copy-ck" type="button" data-account-id="${idEsc}" data-kind="psid" title="复制 PSID"><i class="fas fa-copy"></i></button></div>
                     <div><span>__Secure-1PSIDTS</span><code>${escapeHtml(account.psidts || '未设置')}</code><button class="acc-copy-ck" type="button" data-account-id="${idEsc}" data-kind="psidts" title="复制 PSIDTS"><i class="fas fa-copy"></i></button></div>
                 </div>
+                ${account.source === 'flow' ? `<div class="account-detail account-flow-email">
+                    <span class="label">Flow 邮箱</span>
+                    <span class="value">${escapeHtml(account.flow_email || '未提供')}</span>
+                </div>` : ''}
                 <div class="account-detail">
                     <span class="label">${t('accounts.requests')}</span>
                     <span class="value">${formatNumber(account.request_count || 0)}</span>
@@ -1351,7 +1309,6 @@ async function initApp() {
     initSettings();
     initApiKeys();
     initGems();
-    initLightbox();
 
     console.log('Gemini2API 管理控制台已加载');
 }
@@ -1367,7 +1324,6 @@ window.app = {
     sendPlaygroundRequest,
     clearPlayground,
     copyModel,
-    openLightbox,
     reloadCurrentSection() {
         const activeSection = document.querySelector('.section.active');
         if (activeSection) {

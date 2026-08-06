@@ -230,8 +230,8 @@ class PatrolService:
         merged["models"] = models
         image_min = int(merged.get("image_min_count", 1))
         image_max = int(merged.get("image_max_count", 5))
-        if not 1 <= image_min <= image_max <= 5:
-            raise ValueError("图片随机张数需满足 1 ≤ 最少张数 ≤ 最多张数 ≤ 5")
+        if not 1 <= image_min <= image_max:
+            raise ValueError("图片随机张数需满足 1 ≤ 最少张数 ≤ 最多张数")
         if not 1 <= int(merged.get("text_test_count", 1)) <= 20:
             raise ValueError("文字测试次数需在 1 到 20 之间")
         if not 1 <= int(merged.get("image_test_count", 1)) <= 20:
@@ -344,7 +344,7 @@ class PatrolService:
                     if not images:
                         raise ValueError("图片素材库为空，请先上传测试图片")
                     count = random.randint(self.config.get("image_min_count", 1), self.config.get("image_max_count", 5))
-                    selected = random.sample(images, min(count, len(images)))
+                    selected = random.choices(images, k=count)
                     prompt = random.choice(IMAGE_PROMPTS)
                     attachments = []
                     for image in selected:
@@ -382,15 +382,35 @@ class PatrolService:
     async def notify_browser_failure(self, account, error: str) -> dict:
         if not self.config.get("webhook_url"):
             return {"sent": False, "error": "飞书 Webhook 未配置"}
-        text = "\n".join([
+        lines = [
             "【Gemini2API 浏览器维护告警】",
             f"账号：{account.label}（{account.id}）",
+        ]
+        if getattr(account, "source", "") == "flow":
+            lines.append(f"Flow 邮箱：{getattr(account, 'flow_email', '') or '未提供'}")
+        lines.extend([
             "状态：内置浏览器获取 Cookie 失败",
             f"原因：{error[:300]}",
             f"时间：{datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
             "处理：请进入管理台「账号管理」更新 Cookie，或检查 Flow 连接。",
         ])
+        text = "\n".join(lines)
         return await self._send_feishu(text, "browser maintenance")
+
+    async def notify_flow_failure(self, account, error: str) -> dict:
+        if not self.config.get("webhook_url"):
+            return {"sent": False, "error": "飞书 Webhook 未配置"}
+        flow_email = getattr(account, "flow_email", "") or "未提供"
+        text = "\n".join([
+            "【Gemini2API Flow 维护告警】",
+            f"账号：{account.label}（{account.id}）",
+            f"Flow 邮箱：{flow_email}",
+            "状态：从 Flow 获取 Cookie 失败",
+            f"原因：{error[:300]}",
+            f"时间：{datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
+            "处理：请检查 Flow 账号状态；如已禁用，请重新启用后同步账号。",
+        ])
+        return await self._send_feishu(text, "flow maintenance")
 
     async def _send_feishu(self, text: str, source: str) -> dict:
         webhook = self.config.get("webhook_url", "")

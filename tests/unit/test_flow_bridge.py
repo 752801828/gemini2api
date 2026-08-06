@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.config import settings
+from app.core.account_pool import AccountStatus
 from app.core.flow_bridge import FlowBridgeError, FlowBridgeService
 from app.core.gemini_client import GeminiWebClient
 
@@ -93,3 +94,30 @@ async def test_flow_refresh_failure_notifies_maintenance():
     account, error = notifier.await_args.args
     assert account.id == "flow-9"
     assert error == "login required"
+
+
+@pytest.mark.asyncio
+async def test_disabled_flow_account_is_marked_disabled_without_flow_alert():
+    pool = FakeAccountPool()
+    account = SimpleNamespace(
+        id="flow-18",
+        label="Brady Auclair",
+        source="flow",
+        flow_token_id=18,
+        flow_email="brady@example.com",
+        status=AccountStatus.ACTIVE,
+        last_error="",
+    )
+    pool.accounts[18] = account
+    service = FlowBridgeService(pool, enabled=True, base_url="http://flow.example", secret="bridge-secret")
+    notifier = AsyncMock(return_value={"sent": True})
+    service.set_failure_notifier(notifier)
+    service._request = AsyncMock(side_effect=FlowBridgeError("account_disabled", "Flow account is disabled", 409))
+    try:
+        with pytest.raises(FlowBridgeError, match="disabled"):
+            await service.refresh_token(18)
+    finally:
+        await service.aclose()
+
+    assert account.status == AccountStatus.DISABLED
+    notifier.assert_not_awaited()

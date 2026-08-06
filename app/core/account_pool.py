@@ -188,9 +188,7 @@ class AccountPool:
                 pass
 
         async def refresh_profile() -> bool:
-            if account.source == "flow" and self._flow_cookie_refresher:
-                return bool((await self._flow_cookie_refresher(account)).get("success"))
-            return bool((await self._refresh_account_browser(account)).get("success"))
+            return bool((await self._refresh_account_credentials(account)).get("success"))
 
         client = GeminiWebClient(
             psid=account.psid,
@@ -206,7 +204,11 @@ class AccountPool:
             account.status = AccountStatus.EXPIRED
             logger.warning(f"Account {account.id} ({account.label}) failed to initialize")
             if settings.browser_refresh_enabled and account in self._accounts:
-                task = asyncio.create_task(self._refresh_account_browser(account))
+                task = asyncio.create_task(
+                    self._refresh_failed_account(account)
+                    if account.source == "flow"
+                    else self._refresh_account_browser(account)
+                )
                 self._bg_tasks.add(task)
                 task.add_done_callback(self._bg_tasks.discard)
 
@@ -464,16 +466,16 @@ class AccountPool:
         return result
 
     async def _refresh_account_browser(self, account: Account) -> dict:
+        was_healthy = bool(account.client and account.client.is_healthy)
         if not settings.browser_refresh_enabled:
-            return {"success": False, "error": "Built-in browser refresh is disabled"}
+            return await self._browser_failure(account, "Built-in browser refresh is disabled", was_healthy)
         if not account.client:
-            return {"success": False, "error": "Account client not initialized"}
+            return await self._browser_failure(account, "Account client not initialized", was_healthy)
 
         lock = self._browser_refresh_locks.setdefault(account.id, asyncio.Lock())
         async with lock:
             account.browser_profile_status = "refreshing"
             account.browser_profile_error = ""
-            was_healthy = account.client.is_healthy
             account.status = AccountStatus.REFRESHING
             try:
                 data = await self._request_browser_profile(account)
@@ -559,13 +561,26 @@ class AccountPool:
     def set_flow_cookie_refresher(self, refresher) -> None:
         self._flow_cookie_refresher = refresher
 
+    async def _refresh_account_credentials(self, account: Account) -> dict:
+        if account.source == "flow" and self._flow_cookie_refresher:
+            try:
+                return await self._flow_cookie_refresher(account)
+            except Exception as error:
+                error_type = getattr(error, "error_type", "")
+                if error_type in {"account_disabled", "token_disabled", "disabled"} or "account is disabled" in str(error).lower():
+                    logger.warning("Flow account %s is disabled; falling back to its built-in browser profile", account.id)
+                    account.status = AccountStatus.DISABLED
+                    result = await self._refresh_account_browser(account)
+                    if not result.get("success"):
+                        account.status = AccountStatus.DISABLED
+                    return result
+                raise
+        return await self._refresh_account_browser(account)
+
     async def _refresh_failed_account(self, account: Account) -> None:
         """Best-effort CK refresh before this request fails over to another account."""
         try:
-            if account.source == "flow" and self._flow_cookie_refresher:
-                result = await self._flow_cookie_refresher(account)
-            else:
-                result = await self._refresh_account_browser(account)
+            result = await self._refresh_account_credentials(account)
             if not result.get("success"):
                 logger.warning("Account %s CK refresh failed before failover: %s", account.id, result.get("error", "unknown error"))
         except Exception as error:

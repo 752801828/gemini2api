@@ -17,6 +17,11 @@ def test_patrol_accepts_standard_and_extended_pro_flash_models():
     assert len(config.models) == 5
 
 
+def test_patrol_accepts_image_ranges_above_five():
+    config = PatrolConfigUpdate(image_min_count=10, image_max_count=20)
+    assert (config.image_min_count, config.image_max_count) == (10, 20)
+
+
 class FakePool:
     def __init__(self):
         self.calls = []
@@ -88,6 +93,25 @@ def test_round_records_text_and_random_image_results(tmp_path):
     assert service.delete_round("round-1") is False
 
 
+def test_image_tasks_can_repeat_images_above_library_size(tmp_path):
+    pool = FakePool()
+    service = PatrolService(pool, tmp_path)
+    service.add_image("only.png", PNG)
+    service.update_config({
+        "text_test_enabled": False,
+        "image_test_enabled": True,
+        "image_test_count": 1,
+        "image_min_count": 10,
+        "image_max_count": 20,
+    })
+
+    asyncio.run(service._run_round("round-repeat", "manual"))
+
+    task = service.overview()["history"][0]["tasks"][0]
+    assert 10 <= len(task["image_samples"]) <= 20
+    assert set(task["image_samples"]) == {"only.png"}
+
+
 def test_browser_failure_notification_reuses_patrol_webhook(tmp_path):
     service = PatrolService(FakePool(), tmp_path)
     service.config["webhook_url"] = "https://open.feishu.cn/open-apis/bot/v2/hook/example"
@@ -100,6 +124,24 @@ def test_browser_failure_notification_reuses_patrol_webhook(tmp_path):
     assert "浏览器维护告警" in message
     assert "主账号（a1）" in message
     assert "CK expired" in message
+    assert source == "browser maintenance"
+
+
+def test_flow_browser_failure_notification_includes_email(tmp_path):
+    service = PatrolService(FakePool(), tmp_path)
+    service.config["webhook_url"] = "https://open.feishu.cn/open-apis/bot/v2/hook/example"
+    service._send_feishu = AsyncMock(return_value={"sent": True, "error": ""})
+    account = SimpleNamespace(
+        id="flow-18",
+        label="Brady Auclair",
+        source="flow",
+        flow_email="brady@example.com",
+    )
+
+    asyncio.run(service.notify_browser_failure(account, "browser unavailable"))
+
+    message, source = service._send_feishu.await_args.args
+    assert "Flow 邮箱：brady@example.com" in message
     assert source == "browser maintenance"
 
 

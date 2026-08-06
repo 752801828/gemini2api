@@ -9,6 +9,7 @@ from uuid import uuid4
 import httpx
 
 from app.config import settings
+from app.core.account_pool import AccountStatus
 
 
 class FlowBridgeError(RuntimeError):
@@ -121,6 +122,15 @@ class FlowBridgeService:
                     raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
                 return {"success": True, "account_id": account.id, "flow_token_id": token_id}
             except Exception as error:
+                if isinstance(error, FlowBridgeError) and (
+                    error.error_type in {"account_disabled", "token_disabled", "disabled"}
+                    or "account is disabled" in str(error).lower()
+                ):
+                    account = self.account_pool.get_flow_account(token_id)
+                    if account is not None:
+                        account.status = AccountStatus.DISABLED
+                        account.last_error = str(error)[:300]
+                    raise
                 await self._notify_failure(token_id, error)
                 raise
 

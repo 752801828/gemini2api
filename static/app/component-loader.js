@@ -76,7 +76,7 @@ async function loadComponents(components) {
  */
 async function initializeComponents() {
     const basePath = 'components/';
-    const version = '?v=25';
+    const version = '?v=26';
 
     try {
         // 首先加载 header

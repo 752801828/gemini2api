@@ -3,7 +3,7 @@
  */
 
 const TOKEN_KEY = 'gemini2api_token';
-const SESSION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const SESSION_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours of inactivity
 let _sessionTimer = null;
 
 function _resetSessionTimer() {

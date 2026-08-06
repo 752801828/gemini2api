@@ -24,6 +24,7 @@
 .acc-copy-ck:hover { border-color: var(--primary-color); color: var(--primary-color); }
 
 .account-cookie-updated .value { font-size: .78rem; font-variant-numeric: tabular-nums; }
+.account-flow-email .value { overflow-wrap: anywhere; color: var(--primary-color); font-size: .78rem; }
 
 .account-card {
     background: var(--bg-primary);

@@ -240,6 +240,44 @@ def test_browser_profile_failure_notifies_maintenance():
     assert account.status == AccountStatus.ACTIVE
 
 
+def test_disabled_flow_account_falls_back_to_built_in_browser():
+    class FlowDisabled(RuntimeError):
+        error_type = "account_disabled"
+
+    pool = AccountPool()
+    account = Account(
+        "flow-18",
+        "old-psid",
+        "old-psidts",
+        label="Brady Auclair",
+        source="flow",
+        flow_token_id=18,
+        flow_email="brady@example.com",
+    )
+    pool._flow_cookie_refresher = AsyncMock(side_effect=FlowDisabled("Flow account is disabled"))
+    pool._refresh_account_browser = AsyncMock(return_value={"success": True})
+
+    result = asyncio.run(pool._refresh_account_credentials(account))
+
+    assert result["success"] is True
+    pool._refresh_account_browser.assert_awaited_once_with(account)
+
+
+def test_disabled_flow_account_stays_disabled_when_browser_fallback_fails():
+    class FlowDisabled(RuntimeError):
+        error_type = "account_disabled"
+
+    pool = AccountPool()
+    account = Account("flow-18", "psid", "psidts", source="flow", flow_token_id=18)
+    pool._flow_cookie_refresher = AsyncMock(side_effect=FlowDisabled("Flow account is disabled"))
+    pool._refresh_account_browser = AsyncMock(return_value={"success": False, "error": "browser unavailable"})
+
+    result = asyncio.run(pool._refresh_account_credentials(account))
+
+    assert result["success"] is False
+    assert account.status == AccountStatus.DISABLED
+
+
 def test_manual_browser_capture_updates_exact_credentials_and_status():
     class CookieClient:
         is_healthy = True
