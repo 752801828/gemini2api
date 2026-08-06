@@ -61,6 +61,7 @@ class Account:
     active_requests: int = 0
     last_used: datetime | None = None
     last_error: str = ""
+    cookie_updated_at: str | None = None
     # 被 5xx/503 限流后的冷却截止时间戳（loop.time()）；冷却期内不优先选，但不算 expired
     cooldown_until: float = 0.0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -92,6 +93,7 @@ class AccountPool:
         self._browser_refresh_locks: dict[str, asyncio.Lock] = {}
         self._browser_failure_notifier = None
         self._flow_cookie_refresher = None
+        self._request_count = 0
 
     @property
     def accounts(self) -> list[Account]:
@@ -144,6 +146,7 @@ class AccountPool:
                     source=item.get("source", "manual"),
                     flow_token_id=item.get("flow_token_id"),
                     flow_email=item.get("flow_email", ""),
+                    cookie_updated_at=item.get("cookie_updated_at"),
                 )
             except Exception as e:
                 logger.warning(f"Skipping corrupt account entry #{i} in {path}: {e}")
@@ -168,6 +171,7 @@ class AccountPool:
             psid=settings.gemini_psid,
             psidts=settings.gemini_psidts,
             label="Default (env)",
+            cookie_updated_at=datetime.now(timezone.utc).isoformat(),
         )
         self._accounts.append(account)
 
@@ -348,6 +352,7 @@ class AccountPool:
             psid=psid.strip().strip('"').strip("'").rstrip(";"),
             psidts=psidts.strip().strip('"').strip("'").rstrip(";"),
             label=label or account_id,
+            cookie_updated_at=datetime.now(timezone.utc).isoformat(),
         )
         await self._init_account_client(account)
         self._accounts.append(account)
@@ -382,6 +387,7 @@ class AccountPool:
             source="flow",
             flow_token_id=token_id,
             flow_email=email.strip().lower(),
+            cookie_updated_at=datetime.now(timezone.utc).isoformat(),
         )
         await self._init_account_client(account)
         if not account.client or not account.client.is_healthy:
@@ -453,6 +459,7 @@ class AccountPool:
         account.psidts = current_psidts or psidts
         account.status = AccountStatus.ACTIVE
         account.consecutive_failures = 0
+        account.cookie_updated_at = datetime.now(timezone.utc).isoformat()
         self._save_to_file()
         return result
 
@@ -678,6 +685,7 @@ class AccountPool:
                 "error_count": a.error_count,
                 "active_requests": a.active_requests,
                 "last_used": a.last_used.isoformat() if a.last_used else None,
+                "cookie_updated_at": a.cookie_updated_at,
                 "cooling_down": a.cooldown_until > asyncio.get_event_loop().time(),
                 "models": self.models if a.client else [],
                 "models_count": len(self.models) if a.client else 0,
@@ -699,12 +707,15 @@ class AccountPool:
             "active": self.active_count,
             "strategy": self._strategy.value,
             "max_concurrent_per_account": self._max_concurrent,
+            "request_count": self._request_count,
             "accounts": accounts_info,
         }
 
     async def generate(self, prompt: str, model: str, conversation_id: str = "",
                        attachments: list | None = None, gem_id: str | None = None,
                        account_id: str | None = None) -> dict:
+        self._request_count = getattr(self, "_request_count", 0) + 1
+        request_started = time.time()
         # failover：某账号被可重试错误（5xx/未就绪/401·403）打回时，换下一个 active 账号重试，
         # 直到成功或无更多账号可试。5xx 限流账号进入冷却，401/403 标 expired。
         tried: set = set()
@@ -721,6 +732,7 @@ class AccountPool:
             except RuntimeError:
                 # 没有（更多）账号可用：抛出最后一次可重试错误（若有），否则抛 acquire 的错
                 if last_err is not None:
+                    live_metrics.record_request(model, (time.time() - request_started) * 1000)
                     raise last_err
                 # 锁定账号场景：其它账号已被全部 exclude，acquire 报「无更多账号可故障切换」
                 # 其实是绑定账号本身不可用（expired/busy/cooldown），换更准确的文案。
@@ -730,16 +742,14 @@ class AccountPool:
                     )
                 raise
             account_attempts += 1
-            t0 = time.time()
             released = False
             try:
                 result = await account.client.generate(prompt, model, conversation_id, attachments, gem_id)
-                live_metrics.record_request(model, (time.time() - t0) * 1000)
+                live_metrics.record_request(model, (time.time() - request_started) * 1000)
                 await self.release(account, success=True)
                 released = True
                 return result
             except Exception as e:
-                live_metrics.record_request(model, (time.time() - t0) * 1000)
                 if _is_retryable(e):
                     # 可重试：5xx 冷却该账号、401/403 标 expired，换下一个账号重试
                     last_err = e
@@ -750,11 +760,13 @@ class AccountPool:
                         account.status = AccountStatus.EXPIRED
                     await self._refresh_failed_account(account)
                     if account_attempts >= MAX_REQUEST_ACCOUNT_ATTEMPTS:
+                        live_metrics.record_request(model, (time.time() - request_started) * 1000)
                         raise last_err
                     logger.warning(f"Account {account.id} got {e}; failing over (attempt={account_attempts}/{MAX_REQUEST_ACCOUNT_ATTEMPTS})")
                     continue
                 await self.release(account, success=False)
                 released = True
+                live_metrics.record_request(model, (time.time() - request_started) * 1000)
                 raise
             finally:
                 # 兜底：CancelledError/GeneratorExit 等未走上面分支的路径也归还槽位（P0-4 防泄漏死锁）
@@ -770,6 +782,8 @@ class AccountPool:
         failover：仅在「尚未向客户端 yield 任何内容前」遇到可重试错误（5xx/未就绪/401·403）才换账号重试
         （已经吐出部分内容后再换账号会导致重复，故此时只能终止）。
         """
+        self._request_count = getattr(self, "_request_count", 0) + 1
+        request_started = time.time()
         tried: set = set()
         # 绑定账号：排除其他所有账号，使 acquire/failover 只可能选中目标账号
         if account_id:
@@ -783,6 +797,7 @@ class AccountPool:
                 account = await self.acquire(exclude=tried if tried else None)
             except RuntimeError:
                 if last_err is not None:
+                    live_metrics.record_request(model, (time.time() - request_started) * 1000)
                     raise last_err
                 # 锁定账号场景：其它账号已被全部 exclude，真实原因是绑定账号本身不可用
                 if account_id:
@@ -791,7 +806,6 @@ class AccountPool:
                     )
                 raise
             account_attempts += 1
-            t0 = time.time()
             emitted_any = False
             failover = False
             released = False
@@ -810,12 +824,11 @@ class AccountPool:
                             await asyncio.sleep(1)
                             continue
                         raise
-                live_metrics.record_request(model, (time.time() - t0) * 1000)
+                live_metrics.record_request(model, (time.time() - request_started) * 1000)
                 await self.release(account, success=True)
                 released = True
                 return
             except Exception as e:
-                live_metrics.record_request(model, (time.time() - t0) * 1000)
                 # 只有「还没吐任何内容」+「可重试」+「还有别的账号」才 failover
                 if _is_retryable(e) and not emitted_any:
                     last_err = e
@@ -826,12 +839,14 @@ class AccountPool:
                         account.status = AccountStatus.EXPIRED
                     await self._refresh_failed_account(account)
                     if account_attempts >= MAX_REQUEST_ACCOUNT_ATTEMPTS:
+                        live_metrics.record_request(model, (time.time() - request_started) * 1000)
                         raise last_err
                     logger.warning(f"Account {account.id} got {e} before first chunk; stream failing over (attempt={account_attempts}/{MAX_REQUEST_ACCOUNT_ATTEMPTS})")
                     failover = True
                 else:
                     await self.release(account, success=False)
                     released = True
+                    live_metrics.record_request(model, (time.time() - request_started) * 1000)
                     raise
             finally:
                 # 兜底：客户端断连(GeneratorExit)/取消(CancelledError) 等路径也归还槽位（P0-4 防泄漏死锁）
@@ -862,6 +877,7 @@ class AccountPool:
                 "source": a.source,
                 "flow_token_id": a.flow_token_id,
                 "flow_email": a.flow_email,
+                "cookie_updated_at": a.cookie_updated_at,
             })
         path = Path(settings.accounts_file)
         # 原子写：accounts.json 存 PSID 凭据，写入中途崩溃/断电不得截断成半截 JSON（VULN-010）。

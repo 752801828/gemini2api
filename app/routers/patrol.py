@@ -16,8 +16,8 @@ class PatrolConfigUpdate(BaseModel):
     image_test_enabled: bool | None = None
     text_test_count: int | None = Field(default=None, ge=1, le=20)
     image_test_count: int | None = Field(default=None, ge=1, le=20)
-    models: list[Literal["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]] | None = Field(
-        default=None, min_length=1, max_length=4
+    models: list[Literal["gemini-pro", "gemini-pro-thinking", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]] | None = Field(
+        default=None, min_length=1, max_length=5
     )
     image_min_count: int | None = Field(default=None, ge=1, le=5)
     image_max_count: int | None = Field(default=None, ge=1, le=5)

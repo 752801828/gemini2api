@@ -2,6 +2,7 @@ import re
 import json
 import time
 import random
+import uuid
 import asyncio
 import logging
 from pathlib import Path
@@ -62,11 +63,15 @@ GEMINI_MODELS = {
 
 # 对外暴露的稳定模型名（永不变，API 契约）。客户端只认这 4 个，
 # 内部按账号当前真实可用的模型动态映射，账号订阅等级/Google 灰度怎么变都不影响 API。
-PUBLIC_MODELS = ["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]
+PUBLIC_MODELS = [
+    "gemini-pro", "gemini-pro-thinking", "gemini-flash",
+    "gemini-flash-thinking", "gemini-flash-lite",
+]
 _PUBLIC_FAMILY = {
     "gemini-pro": "pro",
+    "gemini-pro-thinking": "pro",
     "gemini-flash": "flash",
-    "gemini-flash-thinking": "flash-thinking",
+    "gemini-flash-thinking": "flash",
     "gemini-flash-lite": "flash-lite",
 }
 # 每个 family 的默认内部模型（账号没拉到真实模型时的兜底，按基础版）
@@ -79,6 +84,17 @@ _FAMILY_DEFAULT = {
 
 MODEL_ALIASES = {
     # 旧版别名 → 公开名（再由公开名按账号动态解析），保留兼容
+    # Gemini 网页当前版本名 → 稳定公开名；紧凑写法兼容现有调用方输入。
+    "gemini-3.1-pro": "gemini-pro",
+    "gemini-3.1pro": "gemini-pro",
+    "gemini-3.1-pro-thinking": "gemini-pro-thinking",
+    "gemini-3.1pro-thinking": "gemini-pro-thinking",
+    "gemini-3.6-flash": "gemini-flash",
+    "gemini-3.6flash": "gemini-flash",
+    "gemini-3.5-flash-lite": "gemini-flash-lite",
+    "gemini-3.5flash-lite": "gemini-flash-lite",
+    "gemini-3.6-flash-thinking": "gemini-flash-thinking",
+    "gemini-3.6flash-thinking": "gemini-flash-thinking",
     "gemini-2.5-pro": "gemini-pro",
     "gemini-2.5-flash": "gemini-flash",
     "gemini-2.5-flash-thinking": "gemini-flash-thinking",
@@ -119,15 +135,40 @@ def _resolve_model(model_name: str, family_model: dict[str, str] | None = None) 
     return name
 
 
-def _build_model_header(model_name: str) -> dict[str, str]:
+def _is_extended_thinking_model(model_name: str) -> bool:
+    name = MODEL_ALIASES.get(model_name, model_name)
+    if name in {"gemini-pro-thinking", "gemini-flash-thinking"}:
+        return True
+    info = GEMINI_MODELS.get(_resolve_model(name))
+    return bool(info and info["family"] == "flash-thinking")
+
+
+def _build_model_header(model_name: str, extended_thinking: bool | None = None) -> dict[str, str]:
     resolved = _resolve_model(model_name)
     model_info = GEMINI_MODELS.get(resolved)
     if not model_info:
         return {}
+    if extended_thinking is None:
+        extended_thinking = _is_extended_thinking_model(model_name)
+
+    # Gemini Web 当前把思考深度作为模型请求头的独立字段：1=标准，2=扩展。
+    # Pro 与 Flash 共用同一开关；model hash 仍由账号动态解析结果决定。
+    mode = {"flash": 1, "flash-thinking": 1, "flash-lite": 6, "pro": 3}[model_info["family"]]
+    request_id = str(uuid.uuid4())
+    header = [None] * 17
+    header[0] = 1
+    header[4] = model_info["id"]
+    header[7] = 0
+    header[8] = [4, 5, 6, 8]
+    header[11] = mode
+    header[14] = mode
+    header[15] = 2 if extended_thinking else 1
+    header[16] = request_id
     return {
-        MODEL_HEADER_KEY: f'[1,null,null,null,"{model_info["id"]}",null,null,0,[4],null,null,{model_info["capacity"]}]',
+        MODEL_HEADER_KEY: json.dumps(header, separators=(",", ":")),
+        "x-goog-ext-525005358-jspb": json.dumps([request_id, 1], separators=(",", ":")),
         "x-goog-ext-73010989-jspb": "[0]",
-        "x-goog-ext-73010990-jspb": "[0]",
+        "x-goog-ext-73010990-jspb": "[0,0,0]",
     }
 
 
@@ -1119,7 +1160,9 @@ class GeminiWebClient:
         encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
         form_data = {"at": self._session_token, "f.req": encoded}
         headers = self._get_headers("POST", content_type="application/x-www-form-urlencoded")
-        model_headers = _build_model_header(resolved)
+        model_headers = _build_model_header(
+            resolved, extended_thinking=_is_extended_thinking_model(model)
+        )
         if model_headers:
             headers.update(model_headers)
 
@@ -1251,7 +1294,9 @@ class GeminiWebClient:
         form_data = {"at": self._session_token, "f.req": encoded}
         headers = self._get_headers("POST", content_type="application/x-www-form-urlencoded")
 
-        model_headers = _build_model_header(resolved)
+        model_headers = _build_model_header(
+            resolved, extended_thinking=_is_extended_thinking_model(model)
+        )
         if model_headers:
             headers.update(model_headers)
 

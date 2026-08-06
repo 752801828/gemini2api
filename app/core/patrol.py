@@ -37,7 +37,7 @@ IMAGE_PROMPTS = [
     "请为每张图片写一句简短、客观的中文说明。",
     "请判断这些图片大致属于什么场景，并给出简要依据。",
 ]
-MODELS = ["gemini-pro", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]
+MODELS = ["gemini-pro", "gemini-pro-thinking", "gemini-flash", "gemini-flash-thinking", "gemini-flash-lite"]
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -388,7 +388,7 @@ class PatrolService:
             "状态：内置浏览器获取 Cookie 失败",
             f"原因：{error[:300]}",
             f"时间：{datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
-            "处理：请进入管理台「浏览器中心」重试或更新 Cookie。",
+            "处理：请进入管理台「账号管理」更新 Cookie，或检查 Flow 连接。",
         ])
         return await self._send_feishu(text, "browser maintenance")
 
@@ -451,7 +451,14 @@ class PatrolService:
             tasks = [task for item in self.history for task in item.get("tasks", []) if task.get("type") == task_type]
             success = sum(bool(task.get("success")) for task in tasks)
             total = len(tasks)
-            return {"tasks": total, "success": success, "failed": total - success, "rate": round(success * 100 / total, 1) if total else 0.0}
+            durations = [task["duration_ms"] for task in tasks if isinstance(task.get("duration_ms"), (int, float))]
+            return {
+                "tasks": total,
+                "success": success,
+                "failed": total - success,
+                "rate": round(success * 100 / total, 1) if total else 0.0,
+                "avg_duration_ms": round(sum(durations) / len(durations)) if durations else 0,
+            }
 
         return {
             "config": self.public_config(),

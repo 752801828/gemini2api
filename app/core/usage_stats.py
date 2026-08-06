@@ -119,9 +119,9 @@ class UsageStatsStore:
             logger.error(f"[UsageStats] Save failed: {e}")
 
     def _pool_live(self, pool) -> dict:
-        req = err = active = total = 0
+        req = getattr(pool, "_request_count", 0)
+        err = active = total = 0
         for a in pool.accounts:
-            req += a.request_count
             err += a.error_count
             if a.status.value == "active":
                 active += 1

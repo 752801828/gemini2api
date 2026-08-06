@@ -4,8 +4,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.core.patrol import IMAGE_PROMPTS, TEXT_PROMPTS, PatrolService
+from app.routers.patrol import PatrolConfigUpdate
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"test-image"
+
+
+def test_patrol_accepts_standard_and_extended_pro_flash_models():
+    config = PatrolConfigUpdate(models=[
+        "gemini-pro", "gemini-pro-thinking", "gemini-flash",
+        "gemini-flash-thinking", "gemini-flash-lite",
+    ])
+    assert len(config.models) == 5
 
 
 class FakePool:
@@ -65,8 +74,12 @@ def test_round_records_text_and_random_image_results(tmp_path):
     assert len(overview["history"][0]["tasks"][2]["response_preview"]) == 300
     assert len(overview["history"][0]["tasks"][2]["image_sample_ids"]) == len(overview["history"][0]["tasks"][2]["image_samples"])
     assert all(call["model"] in {"gemini-flash", "gemini-pro"} for call in pool.calls)
-    assert overview["stats"]["types"]["text"] == {"tasks": 2, "success": 2, "failed": 0, "rate": 100.0}
-    assert overview["stats"]["types"]["image"] == {"tasks": 3, "success": 3, "failed": 0, "rate": 100.0}
+    text_stats = overview["stats"]["types"]["text"]
+    image_stats = overview["stats"]["types"]["image"]
+    assert {key: text_stats[key] for key in ("tasks", "success", "failed", "rate")} == {"tasks": 2, "success": 2, "failed": 0, "rate": 100.0}
+    assert {key: image_stats[key] for key in ("tasks", "success", "failed", "rate")} == {"tasks": 3, "success": 3, "failed": 0, "rate": 100.0}
+    assert text_stats["avg_duration_ms"] >= 0
+    assert image_stats["avg_duration_ms"] >= 0
 
     assert service.delete_round("round-1") is True
     updated = service.overview()
@@ -88,3 +101,19 @@ def test_browser_failure_notification_reuses_patrol_webhook(tmp_path):
     assert "主账号（a1）" in message
     assert "CK expired" in message
     assert source == "browser maintenance"
+
+
+def test_patrol_type_stats_include_average_subtask_duration(tmp_path):
+    service = PatrolService(FakePool(), tmp_path)
+    service.history = [{
+        "tasks": [
+            {"type": "text", "success": True, "duration_ms": 100},
+            {"type": "text", "success": False, "duration_ms": 300},
+            {"type": "image", "success": True, "duration_ms": 500},
+        ]
+    }]
+
+    stats = service.overview()["stats"]["types"]
+
+    assert stats["text"]["avg_duration_ms"] == 200
+    assert stats["image"]["avg_duration_ms"] == 500

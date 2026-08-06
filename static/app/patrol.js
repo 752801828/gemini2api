@@ -35,9 +35,9 @@ function render(data) {
     const textStats = stats.types?.text || { tasks: 0, success: 0, rate: 0 };
     const imageStats = stats.types?.image || { tasks: 0, success: 0, rate: 0 };
     text('patrol-text-rate', `${textStats.rate}%`);
-    text('patrol-text-rate-detail', `${textStats.success} / ${textStats.tasks} 成功`);
+    text('patrol-text-rate-detail', `${textStats.success} / ${textStats.tasks} 成功 · 均耗时 ${duration(textStats.avg_duration_ms || 0)}`);
     text('patrol-image-rate', `${imageStats.rate}%`);
-    text('patrol-image-rate-detail', `${imageStats.success} / ${imageStats.tasks} 成功`);
+    text('patrol-image-rate-detail', `${imageStats.success} / ${imageStats.tasks} 成功 · 均耗时 ${duration(imageStats.avg_duration_ms || 0)}`);
 
     const livebar = document.getElementById('patrol-livebar');
     isRunning = running;

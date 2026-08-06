@@ -1,4 +1,5 @@
 import asyncio
+import json
 import types
 from pathlib import Path
 import pytest
@@ -188,7 +189,31 @@ def test_browser_profile_refresh_hot_updates_and_persists():
     assert (account.psid, account.psidts) == ("new-psid", "new-psidts")
     assert account.status == AccountStatus.ACTIVE
     assert account.browser_profile_status == "ready"
+    assert account.cookie_updated_at
     assert saved == [True]
+
+
+def test_manual_cookie_update_timestamp_is_persisted(tmp_path, monkeypatch):
+    class CookieClient:
+        is_healthy = True
+        cookie_credentials = ("old-psid", "old-psidts")
+
+        async def reload_cookies(self, psid, psidts):
+            self.cookie_credentials = (psid, psidts)
+            return {"success": True}
+
+    accounts_file = tmp_path / "accounts.json"
+    monkeypatch.setattr("app.core.account_pool.settings.accounts_file", str(accounts_file))
+    pool = AccountPool()
+    account = Account("account-0", "old-psid", "old-psidts", client=CookieClient())
+    pool._accounts = [account]
+
+    asyncio.run(pool.update_account_cookies("account-0", "new-psid", "new-psidts"))
+
+    stored = json.loads(accounts_file.read_text(encoding="utf-8"))["accounts"][0]
+    assert stored["cookie_updated_at"] == account.cookie_updated_at
+    assert stored["psid"] == "new-psid"
+    assert stored["psidts"] == "new-psidts"
 
 
 def test_browser_profile_failure_notifies_maintenance():
@@ -310,11 +335,14 @@ def test_refresher_clears_only_chromium_singleton_markers():
     assert "_clear_stale_chromium_locks(profile_dir)" in source
 
 
-def test_browser_center_exposes_flow_cookie_sync():
+def test_browser_center_is_removed_and_accounts_show_cookie_update_time():
     root = Path(__file__).resolve().parents[2]
-    html = (root / "static" / "components" / "section-browser.html").read_text(encoding="utf-8")
+    sidebar = (root / "static" / "components" / "sidebar.html").read_text(encoding="utf-8")
+    loader = (root / "static" / "app" / "component-loader.js").read_text(encoding="utf-8")
     app = (root / "static" / "app" / "app.js").read_text(encoding="utf-8")
 
-    assert 'id="syncFlowBridgeBtn"' in html
-    assert "/admin/flow-bridge/sync" in app
-    assert "/admin/flow-bridge/accounts/${accountId}/refresh" in app
+    assert 'data-section="browser"' not in sidebar
+    assert "section-browser.html" not in loader
+    assert "CK 更新时间" in app
+    assert "account-browser-profile" not in app
+    assert "acc-browser-btn" not in app

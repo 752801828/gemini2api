@@ -2,6 +2,8 @@ import json
 
 from app.core.gemini_client import (
     _resolve_model,
+    _build_model_header,
+    MODEL_HEADER_KEY,
     _build_id_alias_map,
     PUBLIC_MODELS,
     GEMINI_MODELS,
@@ -42,10 +44,37 @@ def test_alias_2_0_flash_lite_maps_to_flash_lite():
     assert _resolve_model("gemini-2.0-flash-lite") == "gemini-3-flash-lite"
 
 
-def test_regression_existing_public_models_unchanged():
+def test_current_web_model_names_map_to_stable_public_families():
+    family_models = {
+        "pro": "gemini-3-pro-advanced",
+        "flash": "gemini-3-flash-advanced",
+        "flash-lite": "gemini-3-flash-lite-advanced",
+        "flash-thinking": "gemini-3-flash-thinking-advanced",
+    }
+    assert _resolve_model("gemini-3.1-pro", family_models) == "gemini-3-pro-advanced"
+    assert _resolve_model("gemini-3.6-flash", family_models) == "gemini-3-flash-advanced"
+    assert _resolve_model("gemini-3.5-flash-lite", family_models) == "gemini-3-flash-lite-advanced"
+    assert _resolve_model("gemini-3.6-flash-thinking", family_models) == "gemini-3-flash-advanced"
+    assert _resolve_model("gemini-3.1-pro-thinking", family_models) == "gemini-3-pro-advanced"
+
+
+def test_stable_public_models_resolve_to_current_families():
     assert _resolve_model("gemini-pro") == "gemini-3-pro"
     assert _resolve_model("gemini-flash") == "gemini-3-flash"
-    assert _resolve_model("gemini-flash-thinking") == "gemini-3-flash-thinking"
+    assert _resolve_model("gemini-flash-thinking") == "gemini-3-flash"
+
+
+def test_pro_and_flash_support_native_extended_thinking_header():
+    cases = (
+        ("gemini-flash", "gemini-flash-thinking"),
+        ("gemini-pro", "gemini-pro-thinking"),
+    )
+    for standard_model, extended_model in cases:
+        standard = json.loads(_build_model_header(standard_model)[MODEL_HEADER_KEY])
+        extended = json.loads(_build_model_header(extended_model)[MODEL_HEADER_KEY])
+        assert standard[4] == extended[4]
+        assert standard[15] == 1
+        assert extended[15] == 2
 
 
 def test_parse_models_from_status_maps_flash_lite():

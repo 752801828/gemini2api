@@ -50,7 +50,14 @@ async def reload_cookies(req: ReloadCookiesRequest = None):
         result = None
         for account in account_pool.accounts:
             if account.client:
-                result = await account.client.reload_cookies(psid=req.psid, psidts=req.psidts)
+                try:
+                    result = await account_pool.update_account_cookies(
+                        account.id,
+                        req.psid or account.psid,
+                        req.psidts or account.psidts,
+                    )
+                except RuntimeError as exc:
+                    result = {"success": False, "error": str(exc)}
                 if result.get("success"):
                     return {"status": "ok", "message": "Cookies reloaded successfully", "healthy": True}
         if result is None:
@@ -69,10 +76,14 @@ async def reload_cookies(req: ReloadCookiesRequest = None):
             result = None
             for account in account_pool.accounts:
                 if account.client:
-                    result = await account.client.reload_cookies(
-                        psid=fresh.gemini_psid,
-                        psidts=fresh.gemini_psidts,
-                    )
+                    try:
+                        result = await account_pool.update_account_cookies(
+                            account.id,
+                            fresh.gemini_psid,
+                            fresh.gemini_psidts,
+                        )
+                    except RuntimeError as exc:
+                        result = {"success": False, "error": str(exc)}
                     if result.get("success"):
                         return {"status": "ok", "message": "Cookies reloaded successfully", "healthy": True}
             if result is None:

@@ -6,6 +6,7 @@ import pytest
 from app.config import Settings, settings
 from app.core.account_pool import AccountPool, HTTPStatusError, _is_retryable
 from app.core.gemini_client import GeminiWebClient
+from app.core.usage_metrics import live_metrics
 
 
 class _FailClient:
@@ -34,6 +35,7 @@ class _StreamRetryClient:
 
 
 def test_request_failover_refreshes_ck_and_stops_after_three_accounts():
+    live_metrics.drain()
     pool = AccountPool()
     accounts = [
         types.SimpleNamespace(id=f"account-{index}", client=_FailClient(RuntimeError("network timeout")))
@@ -64,9 +66,12 @@ def test_request_failover_refreshes_ck_and_stops_after_three_accounts():
     assert refreshed == selected
     assert accounts[3].client.calls == 0
     assert _is_retryable(HTTPStatusError(429)) is True
+    assert pool._request_count == 1
+    assert live_metrics.drain()["model_requests"] == {"gemini-pro": 1}
 
 
 def test_stream_retries_same_account_once_before_failover():
+    live_metrics.drain()
     pool = AccountPool()
     client = _StreamRetryClient()
     account = types.SimpleNamespace(id="account-0", client=client)
@@ -85,6 +90,8 @@ def test_stream_retries_same_account_once_before_failover():
 
     assert asyncio.run(collect()) == [{"type": "final", "text": "ok"}]
     assert client.calls == 2
+    assert pool._request_count == 1
+    assert live_metrics.drain()["model_requests"] == {"gemini-pro": 1}
 
 
 def test_non_stream_same_account_retry_is_hard_capped_at_one(monkeypatch):

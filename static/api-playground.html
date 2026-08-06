@@ -211,6 +211,7 @@
         .model-index { float: right; color: var(--dim); font-family: var(--mono); font-size: 9px; }
         .model-name { display: block; overflow-wrap: anywhere; color: var(--ink); font-family: var(--mono); font-size: 11px; font-weight: 750; line-height: 1.45; }
         .model-card.active .model-name { color: var(--signal); }
+        .model-version { display: block; margin-top: 3px; color: var(--signal); font-size: 10px; font-weight: 700; }
         .model-desc { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
         .model-tags { margin-top: 9px; display: flex; gap: 5px; flex-wrap: wrap; }
         .model-tag { padding: 3px 6px; border-radius: 6px; background: var(--surface-3); color: var(--muted); font-family: var(--mono); font-size: 8px; font-weight: 700; }
@@ -352,7 +353,7 @@
 
     <main class="workspace">
         <aside class="pane model-pane">
-            <div class="pane-head"><div><div class="pane-kicker">01 / Model</div><div class="pane-title">选择模型</div></div><span id="modelCount" class="counter">04</span></div>
+            <div class="pane-head"><div><div class="pane-kicker">01 / Model</div><div class="pane-title">选择模型</div></div><span id="modelCount" class="counter">05</span></div>
             <div class="model-tools"><input id="modelSearch" class="input search" placeholder="搜索模型 / 能力" aria-label="搜索模型"></div>
             <div id="modelList" class="model-list"></div>
         </aside>
@@ -382,8 +383,6 @@
                     <div class="form-grid">
                         <div class="field wide"><label for="systemPrompt"><span>系统提示词</span><small>OPTIONAL</small></label><input id="systemPrompt" class="input" placeholder="例如：你是一名严谨的图像分析助手"></div>
                         <div class="field wide"><label for="prompt"><span>用户消息</span><small>REQUIRED</small></label><textarea id="prompt" class="textarea" placeholder="输入要发送给模型的内容">请用三句话说明当前服务是否运行正常。</textarea></div>
-                        <div class="field"><label for="temperature"><span>Temperature</span><small>0–2</small></label><input id="temperature" class="input" type="number" min="0" max="2" step="0.1" value="0.7"></div>
-                        <div class="field"><label for="maxTokens"><span>Max tokens</span><small>OPTIONAL</small></label><input id="maxTokens" class="input" type="number" min="1" step="1" placeholder="留空使用默认值"></div>
                         <div class="field wide">
                             <label for="imageInput"><span>图片附件</span><small id="imageCount">0 / 20</small></label>
                             <label id="dropzone" class="dropzone" for="imageInput"><input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple><span><strong>拖入或点击选择图片</strong><span>支持 PNG / JPEG / GIF / WebP，最多 <b>20 张</b>，单张建议不超过 10 MB</span></span></label>
@@ -436,10 +435,11 @@
     const MAX_IMAGES = 20;
     const CODE_API_KEY = 'YOUR_API_KEY';
     const MODELS = [
-        {id:'gemini-flash', label:'Flash', description:'通用高速模型，适合文本与多图理解。', tags:['FAST','VISION']},
-        {id:'gemini-flash-lite', label:'Flash Lite', description:'更低延迟，适合巡检、分类与短回答。', tags:['LITE','LOW LATENCY']},
-        {id:'gemini-pro', label:'Pro', description:'复杂推理与高质量内容生成。', tags:['REASONING','QUALITY']},
-        {id:'gemini-flash-thinking', label:'Flash Thinking', description:'带思考能力的快速模型。', tags:['THINKING','VISION']}
+        {id:'gemini-flash', label:'Gemini 3.6 Flash', description:'全方位帮助，适合文本与多图理解。', tags:['FAST','VISION']},
+        {id:'gemini-flash-thinking', label:'Gemini 3.6 Flash · 扩展思考', description:'Flash 开启扩展思考，擅长解决复杂问题。', tags:['EXTENDED THINKING','VISION']},
+        {id:'gemini-flash-lite', label:'Gemini 3.5 Flash-Lite', description:'极速回答，适合巡检、分类与短回答。', tags:['LITE','LOW LATENCY']},
+        {id:'gemini-pro', label:'Gemini 3.1 Pro', description:'高阶数学、代码与复杂推理。', tags:['REASONING','QUALITY']},
+        {id:'gemini-pro-thinking', label:'Gemini 3.1 Pro · 扩展思考', description:'Pro 开启扩展思考，处理高难度数学与代码。', tags:['EXTENDED THINKING','QUALITY']}
     ];
     const TEMPLATES = {
         text: '请用三句话说明当前服务是否运行正常。',
@@ -462,15 +462,15 @@
         const query=$('modelSearch').value.trim().toLowerCase();
         const rows=state.models.filter(model => !query || `${model.id} ${model.label} ${model.description} ${model.tags.join(' ')}`.toLowerCase().includes(query));
         $('modelCount').textContent=String(rows.length).padStart(2,'0');
-        $('modelList').innerHTML=rows.length ? rows.map((model,index)=>`<button class="model-card ${state.selected?.id===model.id?'active':''}" type="button" data-model="${escapeAttr(model.id)}"><span class="model-index">${String(index+1).padStart(2,'0')}</span><span class="model-name">${escapeHtml(model.id)}</span><span class="model-desc">${escapeHtml(model.description)}</span><span class="model-tags">${model.tags.map(tag=>`<span class="model-tag">${escapeHtml(tag)}</span>`).join('')}</span></button>`).join('') : '<div class="response-empty"><p>没有匹配的模型</p></div>';
+        $('modelList').innerHTML=rows.length ? rows.map((model,index)=>`<button class="model-card ${state.selected?.id===model.id?'active':''}" type="button" data-model="${escapeAttr(model.id)}"><span class="model-index">${String(index+1).padStart(2,'0')}</span><span class="model-name">${escapeHtml(model.id)}</span><span class="model-version">→ ${escapeHtml(model.label)}</span><span class="model-desc">${escapeHtml(model.description)}</span><span class="model-tags">${model.tags.map(tag=>`<span class="model-tag">${escapeHtml(tag)}</span>`).join('')}</span></button>`).join('') : '<div class="response-empty"><p>没有匹配的模型</p></div>';
         document.querySelectorAll('[data-model]').forEach(button=>button.addEventListener('click',()=>selectModel(button.dataset.model)));
     }
     function selectModel(id){
         const model=state.models.find(item=>item.id===id); if(!model) return;
         state.selected=model;
         $('selectedModel').textContent=model.id;
-        $('selectedDescription').textContent=model.description;
-        $('selectedBadge').textContent=model.tags.includes('THINKING')?'THINKING':'MULTIMODAL';
+        $('selectedDescription').textContent=`${model.label} · ${model.description}`;
+        $('selectedBadge').textContent=model.tags.includes('EXTENDED THINKING')?'扩展思考':'MULTIMODAL';
         renderModels(); refresh();
     }
     async function loadModels(){
@@ -513,23 +513,21 @@
     function buildRequest(placeholders=false){
         const base=trimBase($('baseUrl').value)||defaultBase();
         const prompt=$('prompt').value.trim(), system=$('systemPrompt').value.trim();
-        const temperature=Number($('temperature').value), maxTokens=Number($('maxTokens').value);
         const images=placeholders ? state.fileData.map((item,index)=>({...item,dataUrl:`data:${item.mime};base64,IMAGE_${index+1}_BASE64`,base64:`IMAGE_${index+1}_BASE64`})) : state.fileData;
         if(state.protocol==='openai'){
             const content=[]; if(prompt) content.push({type:'text',text:prompt}); images.forEach(image=>content.push({type:'image_url',image_url:{url:image.dataUrl}}));
             const messages=[]; if(system) messages.push({role:'system',content:system}); messages.push({role:'user',content:images.length?content:prompt});
-            const payload={model:state.selected.id,messages,stream:false,temperature}; if(maxTokens>0) payload.max_tokens=maxTokens;
+            const payload={model:state.selected.id,messages,stream:false};
             return {endpoint:`${base}/v1/chat/completions`,payload};
         }
         const parts=[]; if(prompt) parts.push({text:prompt}); images.forEach(image=>parts.push({inline_data:{mime_type:image.mime,data:image.base64}}));
-        const payload={contents:[{role:'user',parts}],generation_config:{temperature}}; if(system) payload.system_instruction=system; if(maxTokens>0) payload.generation_config.max_output_tokens=maxTokens;
+        const payload={contents:[{role:'user',parts}]}; if(system) payload.system_instruction=system;
         return {endpoint:`${base}/v1beta/models/${encodeURIComponent(state.selected.id)}:generateContent`,payload};
     }
     function validate(){
         if(!trimBase($('baseUrl').value)) return '请填写服务地址';
         if(!$('apiKey').value.trim()) return '请填写 API Key';
         if(!$('prompt').value.trim()) return '请填写用户消息';
-        const temperature=Number($('temperature').value); if(!Number.isFinite(temperature)||temperature<0||temperature>2) return 'Temperature 必须在 0 到 2 之间';
         return '';
     }
     function refresh(){
@@ -585,14 +583,14 @@
         $('responseCode').textContent=JSON.stringify(body,null,2);
     }
     function clearResponse(reset=true){ state.response=null; $('responseEmpty').classList.remove('hidden'); $('errorBox').classList.add('hidden'); $('answerBox').classList.add('hidden'); $('mediaGrid').classList.add('hidden'); $('mediaGrid').innerHTML=''; $('rawPanel').classList.add('hidden'); if(reset){ $('httpStatus').textContent='—'; $('latency').textContent='—'; $('mediaCount').textContent='—'; } }
-    function resetBuilder(){ $('systemPrompt').value=''; $('prompt').value=TEMPLATES.text; $('temperature').value='0.7'; $('maxTokens').value=''; $('imageInput').value=''; state.files=[]; state.fileData=[]; renderFiles(); refresh(); }
+    function resetBuilder(){ $('systemPrompt').value=''; $('prompt').value=TEMPLATES.text; $('imageInput').value=''; state.files=[]; state.fileData=[]; renderFiles(); refresh(); }
     async function copyText(text){ try{ await navigator.clipboard.writeText(text); }catch{ const area=document.createElement('textarea'); area.value=text; area.style.cssText='position:fixed;opacity:0'; document.body.append(area); area.select(); document.execCommand('copy'); area.remove(); } showToast('已复制到剪贴板'); }
 
     $('baseUrl').value=defaultBase(); $('apiKey').value=localStorage.getItem('gemini2api_token')||'';
     $('keyToggle').addEventListener('click',()=>{ $('apiKey').type=$('apiKey').type==='password'?'text':'password'; });
     $('loadModels').addEventListener('click',loadModels); $('modelSearch').addEventListener('input',renderModels);
     $('protocolOpenAI').addEventListener('click',()=>setProtocol('openai')); $('protocolGemini').addEventListener('click',()=>setProtocol('gemini'));
-    ['baseUrl','apiKey','systemPrompt','prompt','temperature','maxTokens'].forEach(id=>$(id).addEventListener('input',refresh));
+    ['baseUrl','apiKey','systemPrompt','prompt'].forEach(id=>$(id).addEventListener('input',refresh));
     document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>{ $('prompt').value=TEMPLATES[button.dataset.template]; refresh(); }));
     document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>setTab(button.dataset.tab)));
     $('imageInput').addEventListener('change',event=>addFiles(event.target.files));

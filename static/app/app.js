@@ -7,7 +7,7 @@ import { initThemeSwitcher } from './theme-switcher.js';
 import { initAuth, apiCall, logout } from './auth.js';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
-import { initPatrol, loadPatrol } from './patrol.js?v=7';
+import { initPatrol, loadPatrol } from './patrol.js?v=8';
 import { initLogs } from './logs.js';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
@@ -79,9 +79,6 @@ async function loadSectionData(sectionId) {
             case 'accounts':
                 await loadAccounts();
                 break;
-            case 'browser':
-                await Promise.all([loadAccounts(), loadFlowBridgeStatus()]);
-                break;
             case 'usage-stats':
                 await loadUsageStats();
                 break;
@@ -115,7 +112,7 @@ async function loadDashboard() {
         const accounts = data.accounts || [];
 
         const activeCount = accounts.filter(a => a.status === 'active').length;
-        const totalRequests = accounts.reduce((sum, a) => sum + (a.request_count || 0), 0);
+        const totalRequests = data.request_count ?? accounts.reduce((sum, a) => sum + (a.request_count || 0), 0);
         const modelsSet = new Set();
         accounts.forEach(a => {
             if (a.models && Array.isArray(a.models)) {
@@ -410,8 +407,6 @@ async function loadAccounts() {
     try {
         const data = await apiCall('GET', '/admin/accounts');
         const accounts = data.accounts || [];
-        renderBrowserCenter(accounts);
-
         const container = document.getElementById('accountsList');
         if (!container) return;
 
@@ -434,7 +429,9 @@ async function loadAccounts() {
         container.innerHTML = accounts.map(account => {
             const idEsc = escapeAttr(account.id);
             const labelEsc = escapeAttr(account.label || '');
-            const profile = browserProfileMeta(account);
+            const cookieUpdatedAt = account.cookie_updated_at
+                ? new Date(account.cookie_updated_at).toLocaleString('zh-CN', { hour12: false })
+                : '未记录';
             return `
             <div class="account-card">
                 <div class="account-card-header">
@@ -460,10 +457,9 @@ async function loadAccounts() {
                     <span class="label">${t('accounts.models')}</span>
                     <span class="value">${(account.models || []).length || account.models_count || 0}</span>
                 </div>
-                <div class="account-browser-profile">
-                    <i class="fas fa-earth-asia"></i>
-                    <b>浏览器 Profile <span class="browser-profile-chip ${escapeAttr(profile.status)}">${escapeHtml(profile.label)}</span></b>
-                    <small title="${escapeAttr(profile.detail)}">${escapeHtml(profile.detail)}</small>
+                <div class="account-detail account-cookie-updated">
+                    <span class="label">CK 更新时间</span>
+                    <span class="value">${escapeHtml(cookieUpdatedAt)}</span>
                 </div>
                 <div class="account-actions">
                     <button class="btn btn-sm btn-outline acc-check-btn" data-account-id="${idEsc}">
@@ -471,9 +467,6 @@ async function loadAccounts() {
                     </button>
                     <button class="btn btn-sm btn-outline acc-cookie-btn" data-account-id="${idEsc}" data-account-label="${labelEsc}">
                         <i class="fas fa-cookie-bite"></i> ${t('accounts.updateCookie')}
-                    </button>
-                    <button class="btn btn-sm btn-outline acc-browser-btn" data-account-id="${idEsc}">
-                        <i class="fas fa-earth-asia"></i> 人工登录
                     </button>
                     <button class="btn btn-sm btn-danger acc-remove-btn" data-account-id="${idEsc}">
                         <i class="fas fa-trash"></i> ${t('accounts.delete')}
@@ -500,9 +493,6 @@ async function loadAccounts() {
                 const ok = value && await copyToClipboard(value);
                 showToast(ok ? 'CK 已复制' : '复制失败', ok ? 'success' : 'error');
             });
-        });
-        container.querySelectorAll('.acc-browser-btn').forEach(btn => {
-            btn.addEventListener('click', () => openManualBrowser(btn.dataset.accountId));
         });
         container.querySelectorAll('.acc-remove-btn').forEach(btn => {
             btn.addEventListener('click', () => removeAccount(btn.dataset.accountId));
