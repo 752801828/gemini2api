@@ -31,6 +31,9 @@ services:
     restart: unless-stopped
     depends_on:
       - refresher
+    networks:
+      - default
+      - gemini-bridge
 
   # 内置 Cookie 浏览器：每个账号使用 data/browser_profiles/<account-id> 独立 Profile；
   # 主服务检测到登录失效或管理员手动触发时，按需启动 Chromium 获取并热更新 Cookie。
@@ -56,3 +59,7 @@ services:
       # 与主服务共享 ./data，浏览器 Profile 持久化且按账号隔离。
       - ./data:/app/data
     restart: unless-stopped
+
+networks:
+  gemini-bridge:
+    external: true
