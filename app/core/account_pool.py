@@ -15,6 +15,8 @@ from app.utils.atomic_io import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+MAX_REQUEST_ACCOUNT_ATTEMPTS = 3
+
 
 def _is_5xx(exc: Exception) -> bool:
     """判断异常是否为 5xx（含 Google 503 限流），这类可换账号 failover 重试。"""
@@ -22,14 +24,12 @@ def _is_5xx(exc: Exception) -> bool:
 
 
 def _is_retryable(exc: Exception) -> bool:
-    """可换账号 failover 重试的错误集合（Issue#1-A）：
-    - 5xx（含 Google 503 限流）：冷却该账号后换号
-    - RuntimeError 且含 "not ready"：客户端会话未就绪，换健康账号
-    - HTTPStatusError 401/403：凭据失效，换号并标记 EXPIRED
-    """
+    """Errors safe to retry on another account before a response is emitted."""
     if _is_5xx(exc):
         return True
-    if isinstance(exc, RuntimeError) and "not ready" in str(exc).lower():
+    if isinstance(exc, HTTPStatusError) and exc.status_code == 429:
+        return True
+    if isinstance(exc, RuntimeError):
         return True
     if isinstance(exc, HTTPStatusError) and exc.status_code in (401, 403):
         return True
@@ -552,6 +552,18 @@ class AccountPool:
     def set_flow_cookie_refresher(self, refresher) -> None:
         self._flow_cookie_refresher = refresher
 
+    async def _refresh_failed_account(self, account: Account) -> None:
+        """Best-effort CK refresh before this request fails over to another account."""
+        try:
+            if account.source == "flow" and self._flow_cookie_refresher:
+                result = await self._flow_cookie_refresher(account)
+            else:
+                result = await self._refresh_account_browser(account)
+            if not result.get("success"):
+                logger.warning("Account %s CK refresh failed before failover: %s", account.id, result.get("error", "unknown error"))
+        except Exception as error:
+            logger.warning("Account %s CK refresh failed before failover: %s", account.id, str(error)[:300])
+
     async def check_account(self, account_id: str) -> dict:
         for account in self._accounts:
             if account.id == account_id:
@@ -702,6 +714,7 @@ class AccountPool:
                 raise ValueError(f"Account {account_id} not found")
             tried.update({a.id for a in self._accounts if a.id != account_id})
         last_err = None
+        account_attempts = 0
         while True:
             try:
                 account = await self.acquire(exclude=tried if tried else None)
@@ -716,6 +729,7 @@ class AccountPool:
                         f"Pinned gem account '{account_id}' unavailable (expired/busy/cooldown)"
                     )
                 raise
+            account_attempts += 1
             t0 = time.time()
             released = False
             try:
@@ -734,7 +748,10 @@ class AccountPool:
                     released = True
                     if isinstance(e, HTTPStatusError) and e.status_code in (401, 403):
                         account.status = AccountStatus.EXPIRED
-                    logger.warning(f"Account {account.id} got {e}; failing over (tried={len(tried)})")
+                    await self._refresh_failed_account(account)
+                    if account_attempts >= MAX_REQUEST_ACCOUNT_ATTEMPTS:
+                        raise last_err
+                    logger.warning(f"Account {account.id} got {e}; failing over (attempt={account_attempts}/{MAX_REQUEST_ACCOUNT_ATTEMPTS})")
                     continue
                 await self.release(account, success=False)
                 released = True
@@ -760,6 +777,7 @@ class AccountPool:
                 raise ValueError(f"Account {account_id} not found")
             tried.update({a.id for a in self._accounts if a.id != account_id})
         last_err = None
+        account_attempts = 0
         while True:
             try:
                 account = await self.acquire(exclude=tried if tried else None)
@@ -772,14 +790,26 @@ class AccountPool:
                         f"Pinned gem account '{account_id}' unavailable (expired/busy/cooldown)"
                     )
                 raise
+            account_attempts += 1
             t0 = time.time()
             emitted_any = False
             failover = False
             released = False
             try:
-                async for evt in account.client.generate_stream(prompt, model, conversation_id, attachments, gem_id):
-                    emitted_any = True
-                    yield evt
+                for same_account_attempt in range(2):
+                    try:
+                        async for evt in account.client.generate_stream(prompt, model, conversation_id, attachments, gem_id):
+                            emitted_any = True
+                            yield evt
+                        if not emitted_any:
+                            raise RuntimeError("Gemini returned an empty stream")
+                        break
+                    except Exception as error:
+                        if same_account_attempt == 0 and not emitted_any and _is_retryable(error):
+                            logger.warning("Account %s stream failed before first chunk; quick retry once: %s", account.id, str(error)[:300])
+                            await asyncio.sleep(1)
+                            continue
+                        raise
                 live_metrics.record_request(model, (time.time() - t0) * 1000)
                 await self.release(account, success=True)
                 released = True
@@ -794,7 +824,10 @@ class AccountPool:
                     released = True
                     if isinstance(e, HTTPStatusError) and e.status_code in (401, 403):
                         account.status = AccountStatus.EXPIRED
-                    logger.warning(f"Account {account.id} got {e} before first chunk; stream failing over (tried={len(tried)})")
+                    await self._refresh_failed_account(account)
+                    if account_attempts >= MAX_REQUEST_ACCOUNT_ATTEMPTS:
+                        raise last_err
+                    logger.warning(f"Account {account.id} got {e} before first chunk; stream failing over (attempt={account_attempts}/{MAX_REQUEST_ACCOUNT_ATTEMPTS})")
                     failover = True
                 else:
                     await self.release(account, success=False)

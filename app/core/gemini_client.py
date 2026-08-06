@@ -1039,7 +1039,8 @@ class GeminiWebClient:
         # 5xx（含 Google 503 限流）同账号只快速重试少量次，不长退避空耗；
         # 仍失败则抛出（带 status_code），由 account_pool 换账号 failover。
         max_5xx = max(0, settings.same_account_5xx_retries)
-        for attempt in range(settings.max_retries):
+        total_attempts = min(2, max(1, settings.max_retries))
+        for attempt in range(total_attempts):
             try:
                 result = await self._send_request(prompt, model, conversation_id, attachments, gem_id)
                 if not str(result.get("text", "")).strip() and not result.get("images"):
@@ -1061,13 +1062,13 @@ class GeminiWebClient:
             except Exception as e:
                 last_err = e
                 # 最后一次尝试失败后不再有重试，跳过退避空耗，立即抛错让上层 failover
-                if attempt >= settings.max_retries - 1:
+                if attempt >= total_attempts - 1:
                     break
                 wait = 2 ** attempt
                 logger.warning(f"Attempt {attempt+1}: {e}, wait {wait}s")
                 await asyncio.sleep(wait)
 
-        raise RuntimeError(f"Exhausted {settings.max_retries} retries: {last_err}")
+        raise RuntimeError(f"Exhausted {total_attempts} attempts: {last_err}")
 
     async def generate_stream(self, prompt: str, model: str, conversation_id: str = "",
                               attachments: list | None = None, gem_id: str | None = None):

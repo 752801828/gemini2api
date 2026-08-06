@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     gemini_psidts: str = ""
     api_key: str = ""
     refresh_interval: int = 5
-    max_retries: int = 3
+    max_retries: int = 2
     # 遇到 5xx（尤其 Google 数据中心 IP 的 503 "Sorry" 限流）时：
     # - 同账号只快速重试 same_account_5xx_retries 次（应对瞬时抖动），不长退避空耗
     # - 仍失败则换下一个 active 账号重试（failover），单账号无可换则报错
@@ -116,6 +116,11 @@ class Settings(BaseSettings):
         if v < 1 or v > 65535:
             raise ValueError("PORT must be between 1 and 65535")
         return v
+
+    @field_validator("max_retries")
+    @classmethod
+    def retry_range(cls, v: int) -> int:
+        return min(2, max(1, v))
 
     class Config:
         env_file = ".env"

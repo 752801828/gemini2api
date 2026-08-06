@@ -246,6 +246,11 @@ def _validate_settings_domain(updates: Dict[str, Any]) -> None:
                 status_code=400,
                 detail=f"Setting '{key}' must be >= 1",
             )
+        if key == "max_retries" and value not in (1, 2):
+            raise HTTPException(
+                status_code=400,
+                detail="Setting 'max_retries' must be 1 or 2",
+            )
 
     # rotation_strategy 必须是 RotationStrategy 枚举的合法成员，否则下次启动时
     # account_pool 模块级实例化会 RotationStrategy(value) 抛 ValueError 阻断导入。

@@ -605,7 +605,7 @@ curl -X POST http://localhost:5918/admin/reload-cookies \
 | `BROWSER_REFRESH_ENABLED` | ❌ | `true` | 登录态失效时启用内置浏览器续期 |
 | `BROWSER_REFRESHER_URL` | ❌ | `http://refresher:6080` | Compose 内部浏览器服务地址 |
 | `BROWSER_REFRESH_TIMEOUT` | ❌ | `120` | 单次浏览器续期超时（秒） |
-| `MAX_RETRIES` | ❌ | `3` | 失败重试次数（指数退避） |
+| `MAX_RETRIES` | ❌ | `2` | 单账号总尝试次数（默认首次请求 + 1 次快速重试） |
 | `PORT` | ❌ | `5918` | 服务端口 |
 | `LOG_LEVEL` | ❌ | `info` | 日志级别（debug/info/warning/error） |
 | `RATE_LIMIT_ENABLED` | ❌ | `false` | 启用限流 |
