@@ -26,7 +26,8 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # refresher 的 pwuser 对齐，使共享的 ./data 属主一致。容器以 root 启动后由
 # docker-entrypoint.sh 修复 bind 挂载卷属主再 gosu 降权到 appuser——这样既非 root 运行，
 # 又让历史部署（data 由旧 root 容器创建）`docker compose pull` 无缝升级，无需手动 chown。
-RUN useradd -m -u 1000 appuser \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && useradd -m -u 1000 appuser \
     && chown -R appuser:appuser /app \
     && chmod +x /usr/local/bin/docker-entrypoint.sh
 
