@@ -93,6 +93,21 @@ def test_round_records_text_and_random_image_results(tmp_path):
     assert service.delete_round("round-1") is False
 
 
+def test_bulk_delete_rounds_writes_history_once(tmp_path):
+    service = PatrolService(FakePool(), tmp_path)
+    service.history = [
+        {"id": "round-1", "tasks": []},
+        {"id": "round-2", "tasks": []},
+        {"id": "round-3", "tasks": []},
+    ]
+    service.current = service.history[-1]
+
+    assert service.delete_rounds(["round-1", "round-3", "round-missing", "round-1"]) == ["round-1", "round-3"]
+    assert [item["id"] for item in service.history] == ["round-2"]
+    assert service.current["id"] == "round-2"
+    assert [item["id"] for item in json.loads((tmp_path / "patrol_history.json").read_text(encoding="utf-8"))] == ["round-2"]
+
+
 def test_image_tasks_can_repeat_images_above_library_size(tmp_path):
     pool = FakePool()
     service = PatrolService(pool, tmp_path)

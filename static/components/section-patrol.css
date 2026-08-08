@@ -69,9 +69,17 @@
 .patrol-switch input:checked + span::after { transform: translateX(18px); }
 .patrol-save { width: 100%; margin-top: 0.2rem; }
 .patrol-history { display: flex; flex-direction: column; gap: 1rem; }
+.patrol-history-actions { display: flex !important; flex-direction: row !important; align-items: center; gap: .55rem; }
+.patrol-select-all { display: inline-flex; align-items: center; gap: .4rem; color: var(--text-secondary); font-size: .75rem; font-weight: 750; cursor: pointer; }
+.patrol-select-all input, .patrol-round-select { width: 17px; height: 17px; margin: 0; accent-color: var(--primary-color); cursor: pointer; }
+.patrol-delete-selected { border: 1px solid color-mix(in srgb, var(--danger-color) 35%, var(--border-color)); background: var(--bg-primary); color: var(--danger-color); }
+.patrol-delete-selected:not(:disabled):hover { border-color: var(--danger-color); background: var(--danger-10); }
+.patrol-delete-selected:disabled { opacity: .45; cursor: not-allowed; }
+.patrol-delete-selected span { min-width: 1.35rem; padding: .05rem .35rem; border-radius: 999px; background: var(--danger-10); font-size: .68rem; }
 .patrol-round { overflow: hidden; border: 2px solid var(--border-color); border-radius: var(--radius-xl); background: var(--bg-secondary); box-shadow: var(--shadow-sm); }
+.patrol-round.is-selected { border-color: var(--primary-color); box-shadow: 0 0 0 3px var(--primary-10); }
 .patrol-round[open] { border-color: color-mix(in srgb, var(--primary-color) 42%, var(--border-color)); box-shadow: var(--shadow-md); }
-.patrol-round summary { list-style: none; display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 0.9rem; padding: 1rem; background: var(--bg-primary); cursor: pointer; }
+.patrol-round summary { list-style: none; display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 0.9rem; padding: 1rem; background: var(--bg-primary); cursor: pointer; }
 .patrol-round summary::-webkit-details-marker { display: none; }
 .patrol-round-mark { padding: .35rem .55rem; border-radius: var(--radius-md); background: var(--patrol-ink); color: var(--patrol-lime); font-size: .66rem; font-weight: 900; letter-spacing: .06em; }
 .patrol-round-title { display: flex; flex-direction: column; min-width: 0; }
@@ -121,4 +129,4 @@
 @media (max-width: 1050px) { .patrol-config-body { grid-template-columns: 1fr 1fr; } .patrol-config-column:last-child { grid-column: 1 / -1; } }
 @media (max-width: 1200px) { .patrol-stats { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 900px) { .patrol-stats { grid-template-columns: repeat(2, 1fr); } .patrol-heading { align-items: flex-start; flex-direction: column; } }
-@media (max-width: 650px) { .patrol-stats { grid-template-columns: 1fr; } .patrol-config-body { grid-template-columns: 1fr; } .patrol-config-column:last-child { grid-column: auto; } .patrol-task { grid-template-columns: auto 1fr auto; } .patrol-task > span:nth-of-type(2), .patrol-task > span:nth-of-type(3), .patrol-task > span:nth-of-type(4) { display: none; } .patrol-task-response { grid-column: 1 / -1; } .patrol-task-info { grid-template-columns: 1fr; } .patrol-task-field.wide, .patrol-task-toolbar { grid-column: auto; } .patrol-round summary { grid-template-columns: auto 1fr auto; } .patrol-round-score { display: none; } .patrol-tasks { padding-left: 1.35rem; } .patrol-task-list-head { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 650px) { .patrol-stats { grid-template-columns: 1fr; } .patrol-config-body { grid-template-columns: 1fr; } .patrol-config-column:last-child { grid-column: auto; } .patrol-history-panel .patrol-panel-title { align-items: flex-start; flex-direction: column; } .patrol-history-actions { width: 100%; flex-wrap: wrap; } .patrol-task { grid-template-columns: auto 1fr auto; } .patrol-task > span:nth-of-type(2), .patrol-task > span:nth-of-type(3), .patrol-task > span:nth-of-type(4) { display: none; } .patrol-task-response { grid-column: 1 / -1; } .patrol-task-info { grid-template-columns: 1fr; } .patrol-task-field.wide, .patrol-task-toolbar { grid-column: auto; } .patrol-round summary { grid-template-columns: auto auto 1fr auto; } .patrol-round-score { display: none; } .patrol-tasks { padding-left: 1.35rem; } .patrol-task-list-head { align-items: flex-start; flex-direction: column; } }

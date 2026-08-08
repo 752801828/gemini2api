@@ -4,6 +4,7 @@ import { showToast } from './utils.js';
 let timer = null;
 let isRunning = false;
 const thumbnailUrls = new Map();
+const selectedRoundIds = new Set();
 
 const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -50,7 +51,10 @@ function render(data) {
 
     const imageLookup = new Map((images || []).map(image => [image.name, image.id]));
     renderImages(images || []);
+    const visibleRoundIds = new Set(history.map(round => String(round.id)));
+    [...selectedRoundIds].forEach(roundId => { if (!visibleRoundIds.has(roundId)) selectedRoundIds.delete(roundId); });
     document.getElementById('patrol-history').innerHTML = history.length ? history.map((round, index) => renderRound(round, imageLookup, index)).join('') : '<div class="patrol-empty">暂无盘巡记录</div>';
+    updateRoundSelectionControls();
     hydrateImageThumbs();
 }
 
@@ -123,6 +127,7 @@ function renderRound(round, imageLookup, roundIndex) {
     const notify = round.notification?.sent ? ' · 飞书已通知' : round.notification?.error ? ' · 飞书通知失败' : '';
     return `<details class="patrol-round">
         <summary>
+            <input class="patrol-round-select" type="checkbox" data-select-round="${escapeHtml(round.id)}" aria-label="选择轮次 ${escapeHtml(round.id)}"${selectedRoundIds.has(String(round.id)) ? ' checked' : ''}>
             <span class="patrol-round-mark">轮次 ${String(roundIndex + 1).padStart(2, '0')}</span>
             <span class="patrol-round-title"><b>${escapeHtml(round.id)}</b><small>${localTime(round.started_at)} · ${round.trigger === 'scheduled' ? '定时' : '手动'} · ${duration(round.duration_ms)}${notify}</small></span>
             <span class="patrol-round-score">${round.success || 0}/${round.total || 0}</span>
@@ -219,10 +224,42 @@ async function deleteRound(roundId) {
     if (!window.confirm('确定删除这一整轮盘巡记录吗？本轮内的所有文字和图文任务都会删除，且无法恢复。')) return;
     try {
         await apiCall('DELETE', `/admin/patrol/rounds/${encodeURIComponent(roundId)}`);
+        selectedRoundIds.delete(roundId);
         showToast('整轮盘巡记录已删除', 'success');
         await loadPatrol();
     } catch (error) {
         showToast(`删除轮次失败：${error.message}`, 'error');
+    }
+}
+
+function updateRoundSelectionControls() {
+    const checkboxes = [...document.querySelectorAll('[data-select-round]')];
+    const selectAll = document.getElementById('patrol-select-all');
+    const deleteButton = document.getElementById('patrol-delete-selected');
+    const selectedCount = document.getElementById('patrol-selected-count');
+    if (selectAll) {
+        selectAll.disabled = checkboxes.length === 0;
+        selectAll.checked = checkboxes.length > 0 && selectedRoundIds.size === checkboxes.length;
+        selectAll.indeterminate = selectedRoundIds.size > 0 && selectedRoundIds.size < checkboxes.length;
+    }
+    if (deleteButton) deleteButton.disabled = selectedRoundIds.size === 0;
+    if (selectedCount) selectedCount.textContent = selectedRoundIds.size;
+    checkboxes.forEach(checkbox => checkbox.closest('.patrol-round')?.classList.toggle('is-selected', checkbox.checked));
+}
+
+async function deleteSelectedRounds() {
+    const roundIds = [...selectedRoundIds];
+    if (!roundIds.length || !window.confirm(`确定删除选中的 ${roundIds.length} 轮盘巡记录吗？其中所有文字和图文任务都会删除，且无法恢复。`)) return;
+    const button = document.getElementById('patrol-delete-selected');
+    button.disabled = true;
+    try {
+        const result = await apiCall('POST', '/admin/patrol/rounds/delete', { round_ids: roundIds });
+        selectedRoundIds.clear();
+        showToast(`已删除 ${result.deleted_count || 0} 轮盘巡记录`, 'success');
+        await loadPatrol();
+    } catch (error) {
+        showToast(`批量删除失败：${error.message}`, 'error');
+        updateRoundSelectionControls();
     }
 }
 
@@ -240,6 +277,15 @@ export function initPatrol() {
     document.getElementById('patrol-config-form')?.addEventListener('submit', saveConfig);
     document.getElementById('patrol-run-btn')?.addEventListener('click', runRound);
     document.getElementById('patrol-refresh-btn')?.addEventListener('click', loadPatrol);
+    document.getElementById('patrol-delete-selected')?.addEventListener('click', deleteSelectedRounds);
+    document.getElementById('patrol-select-all')?.addEventListener('change', event => {
+        document.querySelectorAll('[data-select-round]').forEach(checkbox => {
+            checkbox.checked = event.target.checked;
+            if (checkbox.checked) selectedRoundIds.add(checkbox.dataset.selectRound);
+            else selectedRoundIds.delete(checkbox.dataset.selectRound);
+        });
+        updateRoundSelectionControls();
+    });
     const imageInput = document.getElementById('patrol-image-input');
     document.getElementById('patrol-upload-btn')?.addEventListener('click', () => imageInput?.click());
     imageInput?.addEventListener('change', event => {
@@ -251,8 +297,19 @@ export function initPatrol() {
         if (button) deleteImage(button.dataset.deleteImage);
     });
     document.getElementById('patrol-history')?.addEventListener('click', event => {
+        if (event.target.closest('[data-select-round]')) {
+            event.stopPropagation();
+            return;
+        }
         const button = event.target.closest('[data-delete-round]');
         if (button) deleteRound(button.dataset.deleteRound);
+    });
+    document.getElementById('patrol-history')?.addEventListener('change', event => {
+        const checkbox = event.target.closest('[data-select-round]');
+        if (!checkbox) return;
+        if (checkbox.checked) selectedRoundIds.add(checkbox.dataset.selectRound);
+        else selectedRoundIds.delete(checkbox.dataset.selectRound);
+        updateRoundSelectionControls();
     });
     clearInterval(timer);
     timer = setInterval(() => {

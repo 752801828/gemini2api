@@ -170,17 +170,26 @@ class PatrolService:
         self._save_images()
         return True
 
-    def delete_round(self, round_id: str) -> bool:
-        if self.current and self.current.get("id") == round_id and self._round_task and not self._round_task.done():
-            return False
-        round_data = next((item for item in self.history if item.get("id") == round_id), None)
-        if not round_data:
-            return False
-        self.history.remove(round_data)
-        if self.current and self.current.get("id") == round_id:
+    def delete_rounds(self, round_ids: list[str]) -> list[str]:
+        requested = list(dict.fromkeys(round_id for round_id in round_ids if round_id))
+        running_id = (
+            self.current.get("id")
+            if self.current and self._round_task and not self._round_task.done()
+            else None
+        )
+        existing = {item.get("id") for item in self.history}
+        deleted = [round_id for round_id in requested if round_id in existing and round_id != running_id]
+        if not deleted:
+            return []
+        deleted_set = set(deleted)
+        self.history = [item for item in self.history if item.get("id") not in deleted_set]
+        if self.current and self.current.get("id") in deleted_set:
             self.current = copy.deepcopy(self.history[-1]) if self.history else None
         self._save_history()
-        return True
+        return deleted
+
+    def delete_round(self, round_id: str) -> bool:
+        return bool(self.delete_rounds([round_id]))
 
     async def start(self) -> None:
         if not self._scheduler_task or self._scheduler_task.done():

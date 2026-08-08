@@ -32,6 +32,10 @@ class PatrolImageUpload(BaseModel):
     data_base64: str = Field(min_length=1, max_length=14_000_000)
 
 
+class PatrolRoundsDelete(BaseModel):
+    round_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 def _service(request: Request):
     service = getattr(request.app.state, "patrol", None)
     if service is None:
@@ -92,3 +96,9 @@ async def delete_patrol_round(request: Request, round_id: str):
     if not _service(request).delete_round(round_id):
         raise HTTPException(status_code=404, detail="轮次不存在或正在执行")
     return {"status": "ok"}
+
+
+@router.post("/rounds/delete")
+async def delete_patrol_rounds(request: Request, payload: PatrolRoundsDelete):
+    deleted = _service(request).delete_rounds(payload.round_ids)
+    return {"status": "ok", "deleted": deleted, "deleted_count": len(deleted)}

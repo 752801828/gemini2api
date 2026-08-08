@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="components/section-patrol.css?v=8">
+<link rel="stylesheet" href="components/section-patrol.css?v=9">
 <section id="patrol" class="section patrol-section" aria-labelledby="patrol-title">
     <div class="section-header patrol-heading">
         <div>
@@ -108,7 +108,11 @@
         <div class="patrol-panel patrol-history-panel">
             <div class="patrol-panel-title">
                 <div><span>轮次记录</span><small>先展开轮次，再点击具体任务查看完整问题、图片、响应和耗时</small></div>
-                <button class="btn btn-sm btn-outline" type="button" id="patrol-refresh-btn"><i class="fas fa-rotate"></i></button>
+                <div class="patrol-history-actions">
+                    <label class="patrol-select-all"><input type="checkbox" id="patrol-select-all"><span>全选</span></label>
+                    <button class="btn btn-sm patrol-delete-selected" type="button" id="patrol-delete-selected" disabled><i class="fas fa-trash"></i> 删除选中 <span id="patrol-selected-count">0</span></button>
+                    <button class="btn btn-sm btn-outline" type="button" id="patrol-refresh-btn" aria-label="刷新轮次记录"><i class="fas fa-rotate"></i></button>
+                </div>
             </div>
             <div id="patrol-history" class="patrol-history"><div class="patrol-empty">暂无盘巡记录</div></div>
         </div>
