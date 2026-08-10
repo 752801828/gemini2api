@@ -60,7 +60,7 @@ function render(data) {
     isRunning = running;
     livebar.classList.toggle('is-running', running);
     text('patrol-state', running ? `正在执行 ${current?.id || ''}` : config.enabled ? '自动盘巡已开启' : '自动盘巡已暂停');
-    text('patrol-next-run', running ? `${current?.success || 0}/${current?.total || 0} 已完成` : next ? `下一轮 ${localTime(next)}` : '可手动执行');
+    text('patrol-next-run', running ? `${current?.success || 0}/${current?.total || 0} 已完成 · 每账号最多 ${current?.concurrency_per_account || 1} 并发` : next ? `下一轮 ${localTime(next)}` : '可手动执行');
     const runBtn = document.getElementById('patrol-run-btn');
     runBtn.disabled = running;
     runBtn.innerHTML = running ? '<i class="fas fa-spinner fa-spin"></i> 盘巡进行中' : '<i class="fas fa-play"></i> 立即执行一轮';
@@ -146,7 +146,7 @@ function renderRound(round, imageLookup, roundIndex) {
         <summary>
             <input class="patrol-round-select" type="checkbox" data-select-round="${escapeHtml(round.id)}" aria-label="选择轮次 ${escapeHtml(round.id)}"${selectedRoundIds.has(String(round.id)) ? ' checked' : ''}>
             <span class="patrol-round-mark">轮次 ${String(roundIndex + 1).padStart(2, '0')}</span>
-            <span class="patrol-round-title"><b>${escapeHtml(round.id)}</b><small>${localTime(round.started_at)} · ${round.trigger === 'scheduled' ? '定时' : '手动'} · ${duration(round.duration_ms)}${notify}</small></span>
+            <span class="patrol-round-title"><b>${escapeHtml(round.id)}</b><small>${localTime(round.started_at)} · ${round.trigger === 'scheduled' ? '定时' : '手动'} · ${duration(round.duration_ms)} · 每账号并发 ${round.concurrency_per_account || 1}${notify}</small></span>
             <span class="patrol-round-score">${round.success || 0}/${round.total || 0}</span>
             <span class="patrol-pill ${escapeHtml(round.status)}">${statusMap[round.status] || escapeHtml(round.status)}</span>
         </summary>

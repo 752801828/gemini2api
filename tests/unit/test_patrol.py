@@ -1,5 +1,5 @@
-import json
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -221,3 +221,50 @@ def test_patrol_tasks_are_written_to_realtime_log_store(tmp_path):
     assert all(record["method"] == "PATROL" for record in records)
     assert all(record["request"]["round_id"] == "round-log" for record in records)
     assert {record["model"] for record in records} == {"gemini-flash"}
+
+
+def test_patrol_uses_bounded_concurrency_within_each_account(tmp_path):
+    class ConcurrentPool(FakePool):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        def get_status(self):
+            return {
+                "max_concurrent_per_account": 2,
+                "accounts": [{"id": "a1", "label": "主账号"}],
+            }
+
+        async def generate(self, prompt, model, attachments=None, account_id=None):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return {"text": "ok"}
+
+    pool = ConcurrentPool()
+    service = PatrolService(pool, tmp_path)
+    service.update_config({"text_test_count": 4, "image_test_enabled": False})
+
+    asyncio.run(service._run_round("round-concurrent", "manual"))
+
+    assert pool.peak == 2
+    assert service.history[0]["concurrency_per_account"] == 2
+    assert [task["sequence"] for task in service.history[0]["tasks"]] == [1, 2, 3, 4]
+
+
+def test_patrol_overview_ignores_malformed_legacy_tasks(tmp_path):
+    service = PatrolService(FakePool(), tmp_path)
+    service.history = [{
+        "id": "legacy",
+        "total": "1",
+        "success": None,
+        "tasks": [None, "broken", {"account_id": "a1", "account_label": "主账号", "model": "gemini-flash", "success": True}],
+    }]
+
+    stats = service.overview()["stats"]
+
+    assert stats["accounts"][0]["tasks"] == 1
+    assert stats["models"][0]["rate"] == 100.0
+    assert stats["history"]["tasks"] == 0

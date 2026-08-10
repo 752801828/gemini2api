@@ -92,6 +92,7 @@ class PatrolService:
         self.history = self._load_json(self.history_path, [])
         if not isinstance(self.history, list):
             self.history = []
+        self.history = [item for item in self.history if isinstance(item, dict)]
         self.images = self._load_json(self.images_path, [])
         if not isinstance(self.images, list):
             self.images = []
@@ -289,7 +290,8 @@ class PatrolService:
 
     async def _run_round(self, round_id: str, trigger: str) -> None:
         started = time.perf_counter()
-        accounts = self.account_pool.get_status().get("accounts", [])
+        pool_status = self.account_pool.get_status()
+        accounts = pool_status.get("accounts", [])
         test_specs = []
         if self.config.get("text_test_enabled"):
             test_specs.extend(("text", sequence) for sequence in range(1, self.config.get("text_test_count", 1) + 1))
@@ -306,10 +308,14 @@ class PatrolService:
             "success": 0,
             "failed": 0,
             "notification": {"sent": False, "error": ""},
+            "concurrency_per_account": max(1, int(pool_status.get("max_concurrent_per_account") or 1)),
             "tasks": [],
         }
         try:
-            await asyncio.gather(*(self._test_account(account, test_specs) for account in accounts))
+            await asyncio.gather(*(
+                self._test_account(account, test_specs, self.current["concurrency_per_account"])
+                for account in accounts
+            ))
             self.current["status"] = "success" if self.current["failed"] == 0 else "partial"
             if self.current["total"] == 0:
                 self.current["status"] = "empty"
@@ -328,97 +334,106 @@ class PatrolService:
             self.history.append(copy.deepcopy(self.current))
             self._save_history()
 
-    async def _test_account(self, account: dict, test_specs: list[tuple[str, int]]) -> None:
-        for test_type, sequence in test_specs:
-            started = time.perf_counter()
-            result = {
-                "account_id": account.get("id", ""),
-                "account_label": account.get("label") or account.get("id", ""),
-                "type": test_type,
-                "sequence": sequence,
-                "success": False,
-                "duration_ms": 0,
-                "upload_duration_ms": None,
-                "model_duration_ms": None,
-                "attempts": None,
-                "response": "",
-                "response_preview": "",
-                "error": "",
-                "model": "",
-                "prompt": "",
-                "image_sample_ids": [],
-                "image_samples": [],
-            }
-            try:
-                attachments = None
-                model = random.choice(self.config.get("models") or ["gemini-flash"])
-                prompt = random.choice(TEXT_PROMPTS)
-                if test_type == "image":
-                    images = self.list_images()
-                    if not images:
-                        raise ValueError("图片素材库为空，请先上传测试图片")
-                    count = random.randint(self.config.get("image_min_count", 1), self.config.get("image_max_count", 5))
-                    selected = random.choices(images, k=count)
-                    prompt = random.choice(IMAGE_PROMPTS)
-                    attachments = []
-                    for image in selected:
-                        source = self.get_image(image["id"])
-                        if source:
-                            path, mime = source
-                            attachments.append({"data": path.read_bytes(), "filename": image["name"], "mime": mime})
-                    if not attachments:
-                        raise ValueError("选中的图片素材不可用")
-                    result["image_sample_ids"] = [image["id"] for image in selected]
-                    result["image_samples"] = [image["name"] for image in selected]
-                result["model"] = model
-                result["prompt"] = prompt
-                response = await self.account_pool.generate(
-                    prompt,
-                    model,
-                    attachments=attachments,
-                    account_id=account.get("id"),
-                )
-                text = str(response.get("text", "")).strip()
-                timing = response.get("_timing") if isinstance(response.get("_timing"), dict) else {}
-                result["upload_duration_ms"] = timing.get("upload_duration_ms")
-                result["model_duration_ms"] = timing.get("model_duration_ms")
-                result["attempts"] = timing.get("attempts")
-                result["success"] = bool(text)
-                result["response"] = text
-                result["response_preview"] = text[:300]
-                if not text:
-                    result["error"] = "模型返回空内容"
-            except Exception as exc:
-                result["error"] = _safe_error(exc)
-            result["duration_ms"] = round((time.perf_counter() - started) * 1000)
-            self.current["tasks"].append(result)
-            self.current["success" if result["success"] else "failed"] += 1
-            if self.log_store:
-                record = create_log_record(
-                    method="PATROL",
-                    path=f"/patrol/{self.current['id']}/{result['account_id']}/{test_type}/{sequence}",
-                    direction="egress",
-                    model=result["model"] or None,
-                    status=200 if result["success"] else 502,
-                    latency_ms=result["duration_ms"],
-                    error=result["error"] or None,
-                    request_body={
-                        "round_id": self.current["id"],
-                        "account_id": result["account_id"],
-                        "account_label": result["account_label"],
-                        "type": test_type,
-                        "sequence": sequence,
-                        "prompt": result["prompt"],
-                        "image_count": len(result["image_samples"]),
-                    },
-                    response_body={
-                        "success": result["success"],
-                        "attempts": result["attempts"],
-                        "response_preview": result["response_preview"],
-                    },
-                )
-                record.tags = ["patrol", test_type, result["account_id"]]
-                self.log_store.add(record)
+    async def _test_account(self, account: dict, test_specs: list[tuple[str, int]], concurrency: int) -> None:
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def guarded(test_type: str, sequence: int) -> dict:
+            async with semaphore:
+                return await self._test_task(account, test_type, sequence)
+
+        results = await asyncio.gather(*(guarded(test_type, sequence) for test_type, sequence in test_specs))
+        self.current["tasks"].extend(results)
+
+    async def _test_task(self, account: dict, test_type: str, sequence: int) -> dict:
+        started = time.perf_counter()
+        result = {
+            "account_id": account.get("id", ""),
+            "account_label": account.get("label") or account.get("id", ""),
+            "type": test_type,
+            "sequence": sequence,
+            "success": False,
+            "duration_ms": 0,
+            "upload_duration_ms": None,
+            "model_duration_ms": None,
+            "attempts": None,
+            "response": "",
+            "response_preview": "",
+            "error": "",
+            "model": "",
+            "prompt": "",
+            "image_sample_ids": [],
+            "image_samples": [],
+        }
+        try:
+            attachments = None
+            model = random.choice(self.config.get("models") or ["gemini-flash"])
+            prompt = random.choice(TEXT_PROMPTS)
+            if test_type == "image":
+                images = self.list_images()
+                if not images:
+                    raise ValueError("图片素材库为空，请先上传测试图片")
+                count = random.randint(self.config.get("image_min_count", 1), self.config.get("image_max_count", 5))
+                selected = random.choices(images, k=count)
+                prompt = random.choice(IMAGE_PROMPTS)
+                attachments = []
+                for image in selected:
+                    source = self.get_image(image["id"])
+                    if source:
+                        path, mime = source
+                        attachments.append({"data": path.read_bytes(), "filename": image["name"], "mime": mime})
+                if not attachments:
+                    raise ValueError("选中的图片素材不可用")
+                result["image_sample_ids"] = [image["id"] for image in selected]
+                result["image_samples"] = [image["name"] for image in selected]
+            result["model"] = model
+            result["prompt"] = prompt
+            response = await self.account_pool.generate(
+                prompt,
+                model,
+                attachments=attachments,
+                account_id=account.get("id"),
+            )
+            text = str(response.get("text", "")).strip()
+            timing = response.get("_timing") if isinstance(response.get("_timing"), dict) else {}
+            result["upload_duration_ms"] = timing.get("upload_duration_ms")
+            result["model_duration_ms"] = timing.get("model_duration_ms")
+            result["attempts"] = timing.get("attempts")
+            result["success"] = bool(text)
+            result["response"] = text
+            result["response_preview"] = text[:300]
+            if not text:
+                result["error"] = "模型返回空内容"
+        except Exception as exc:
+            result["error"] = _safe_error(exc)
+        result["duration_ms"] = round((time.perf_counter() - started) * 1000)
+        self.current["success" if result["success"] else "failed"] += 1
+        if self.log_store:
+            record = create_log_record(
+                method="PATROL",
+                path=f"/patrol/{self.current['id']}/{result['account_id']}/{test_type}/{sequence}",
+                direction="egress",
+                model=result["model"] or None,
+                status=200 if result["success"] else 502,
+                latency_ms=result["duration_ms"],
+                error=result["error"] or None,
+                request_body={
+                    "round_id": self.current["id"],
+                    "account_id": result["account_id"],
+                    "account_label": result["account_label"],
+                    "type": test_type,
+                    "sequence": sequence,
+                    "prompt": result["prompt"],
+                    "image_count": len(result["image_samples"]),
+                },
+                response_body={
+                    "success": result["success"],
+                    "attempts": result["attempts"],
+                    "response_preview": result["response_preview"],
+                },
+            )
+            record.tags = ["patrol", test_type, result["account_id"]]
+            self.log_store.add(record)
+        return result
 
     async def _notify_feishu(self, round_data: dict) -> dict:
         return await self._send_feishu(self._notification_text(round_data), "patrol")
@@ -511,7 +526,16 @@ class PatrolService:
                 continue
         latest = self.current or (self.history[-1] if self.history else None)
 
-        all_tasks = [task for item in self.history for task in item.get("tasks", [])]
+        def round_number(item: dict, key: str) -> int | float:
+            value = item.get(key, 0)
+            return value if isinstance(value, (int, float)) else 0
+
+        all_tasks = [
+            task
+            for item in self.history
+            for task in (item.get("tasks") if isinstance(item.get("tasks"), list) else [])
+            if isinstance(task, dict)
+        ]
 
         def task_stats(tasks: list[dict]) -> dict:
             success = sum(bool(task.get("success")) for task in tasks)
@@ -544,18 +568,18 @@ class PatrolService:
             "stats": {
                 "today": {
                     "rounds": len(today_rounds),
-                    "tasks": sum(x.get("total", 0) for x in today_rounds),
-                    "success": sum(x.get("success", 0) for x in today_rounds),
+                    "tasks": sum(round_number(x, "total") for x in today_rounds),
+                    "success": sum(round_number(x, "success") for x in today_rounds),
                 },
                 "current": {
-                    "tasks": latest.get("total", 0) if latest else 0,
-                    "success": latest.get("success", 0) if latest else 0,
-                    "failed": latest.get("failed", 0) if latest else 0,
+                    "tasks": round_number(latest, "total") if latest else 0,
+                    "success": round_number(latest, "success") if latest else 0,
+                    "failed": round_number(latest, "failed") if latest else 0,
                 },
                 "history": {
                     "rounds": len(self.history),
-                    "tasks": sum(x.get("total", 0) for x in self.history),
-                    "success": sum(x.get("success", 0) for x in self.history),
+                    "tasks": sum(round_number(x, "total") for x in self.history),
+                    "success": sum(round_number(x, "success") for x in self.history),
                 },
                 "types": {
                     "text": task_stats([task for task in all_tasks if task.get("type") == "text"]),

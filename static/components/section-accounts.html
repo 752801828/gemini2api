@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="components/section-accounts.css?v=8">
+<link rel="stylesheet" href="components/section-accounts.css?v=9">
 <!-- Accounts Section -->
 <section id="accounts" class="section" aria-labelledby="accounts-title">
     <div class="section-header">
@@ -63,6 +63,11 @@
         <div class="flow-sync-toolbar">
             <span id="flowSyncSummary">正在加载账号…</span>
             <button type="button" class="flow-sync-select-all">全选可同步账号</button>
+        </div>
+        <div id="flowSyncProgress" class="flow-sync-progress" hidden>
+            <div><b id="flowSyncProgressTitle">正在后台同步</b><span id="flowSyncProgressState">处理中</span></div>
+            <div class="flow-sync-progress-track"><span></span></div>
+            <small id="flowSyncProgressDetail">正在从 Flow 浏览器 Profile 获取 Cookie，请勿重复提交</small>
         </div>
         <div class="modal-body flow-sync-list" id="flowSyncList">
             <div class="flow-sync-loading"><i class="fas fa-spinner fa-spin"></i> 正在读取 Flow 账号</div>

@@ -7,7 +7,7 @@ import { initThemeSwitcher } from './theme-switcher.js';
 import { initAuth, apiCall, logout } from './auth.js?v=2';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
-import { initPatrol, loadPatrol } from './patrol.js?v=11';
+import { initPatrol, loadPatrol } from './patrol.js?v=12';
 import { initLogs } from './logs.js';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
@@ -374,8 +374,14 @@ function renderFlowSyncAccounts(accounts) {
 async function openFlowSyncModal(button = null) {
     const modal = document.getElementById('flowSyncModal');
     const list = document.getElementById('flowSyncList');
+    const progress = document.getElementById('flowSyncProgress');
     if (!modal || !list) return;
     modal.classList.add('active');
+    modal.querySelector('.modal-content')?.classList.remove('syncing');
+    if (progress) {
+        progress.hidden = true;
+        progress.className = 'flow-sync-progress';
+    }
     list.innerHTML = '<div class="flow-sync-loading"><i class="fas fa-spinner fa-spin"></i> 正在读取 Flow 账号</div>';
     if (button) button.disabled = true;
     try {
@@ -392,17 +398,47 @@ async function openFlowSyncModal(button = null) {
 async function syncFlowBridgeAccounts(button = null) {
     const ids = [...document.querySelectorAll('#flowSyncList input:checked')].map(input => Number(input.value));
     if (!ids.length) return;
-    if (button) button.disabled = true;
+    const modal = document.getElementById('flowSyncModal');
+    const progress = document.getElementById('flowSyncProgress');
+    const title = document.getElementById('flowSyncProgressTitle');
+    const state = document.getElementById('flowSyncProgressState');
+    const detail = document.getElementById('flowSyncProgressDetail');
+    modal?.querySelector('.modal-content')?.classList.add('syncing');
+    modal?.querySelectorAll('.flow-sync-account input').forEach(input => { input.disabled = true; });
+    if (progress) {
+        progress.hidden = false;
+        progress.className = 'flow-sync-progress active';
+    }
+    if (title) title.textContent = `正在同步 ${ids.length} 个账号`;
+    if (state) state.textContent = '后台处理中';
+    if (detail) detail.textContent = '最多 4 个 Flow 浏览器 Profile 并发获取 Cookie，请勿重复提交';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在同步';
+    }
     try {
         const result = await apiCall('POST', '/admin/flow-bridge/sync', { flow_token_ids: ids });
-        closeFlowSyncModal();
+        progress?.classList.add(result.failed ? 'warning' : 'success');
+        if (title) title.textContent = result.failed ? 'Flow 同步部分完成' : 'Flow 同步完成';
+        if (state) state.textContent = `${result.refreshed || 0}/${ids.length} 成功`;
+        if (detail) detail.textContent = `成功 ${result.refreshed || 0} 个，失败 ${result.failed || 0} 个；账号列表正在刷新`;
         showToast(`Flow 同步完成：成功 ${result.refreshed || 0}，失败 ${result.failed || 0}`, result.failed ? 'warning' : 'success');
         await Promise.all([loadAccounts(), loadDashboard(), loadFlowBridgeStatus()]);
+        setTimeout(closeFlowSyncModal, 900);
     } catch (error) {
+        progress?.classList.add('error');
+        if (title) title.textContent = 'Flow 同步失败';
+        if (state) state.textContent = '请求失败';
+        if (detail) detail.textContent = error.message;
         showToast(`Flow 同步失败：${error.message}`, 'error');
         await loadFlowBridgeStatus();
     } finally {
-        if (button) button.disabled = false;
+        modal?.querySelector('.modal-content')?.classList.remove('syncing');
+        modal?.querySelectorAll('.flow-sync-account:not(.unavailable) input').forEach(input => { input.disabled = false; });
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-arrows-rotate"></i> 同步所选账号';
+        }
     }
 }
 

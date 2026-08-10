@@ -138,26 +138,29 @@ class FlowBridgeService:
         selected_ids = {int(token_id) for token_id in flow_token_ids or [] if int(token_id) > 0}
         if flow_token_ids is not None:
             rows = [row for row in rows if int(row.get("flow_token_id") or 0) in selected_ids]
-        results = []
-        for row in rows:
+        semaphore = asyncio.Semaphore(4)
+
+        async def sync_row(row: dict) -> dict:
             ready = row.get("gemini_sync_ready")
             if ready is None:
                 ready = row.get("auth_ready") and row.get("profile_id")
             if not ready:
-                results.append({
+                return {
                     "success": False,
                     "flow_token_id": row.get("flow_token_id"),
                     "error": "Flow browser profile is not ready",
-                })
-                continue
-            try:
-                results.append(await self.refresh_token(int(row.get("flow_token_id"))))
-            except Exception as error:
-                results.append({
-                    "success": False,
-                    "flow_token_id": row.get("flow_token_id"),
-                    "error": str(error)[:300],
-                })
+                }
+            async with semaphore:
+                try:
+                    return await self.refresh_token(int(row.get("flow_token_id")))
+                except Exception as error:
+                    return {
+                        "success": False,
+                        "flow_token_id": row.get("flow_token_id"),
+                        "error": str(error)[:300],
+                    }
+
+        results = await asyncio.gather(*(sync_row(row) for row in rows))
         failed = sum(1 for item in results if not item.get("success"))
         return {
             "success": failed == 0,

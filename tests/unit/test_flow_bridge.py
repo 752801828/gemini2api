@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -161,3 +162,31 @@ async def test_flow_account_list_marks_existing_mappings_as_synced():
         await service.aclose()
 
     assert [account["synced"] for account in accounts] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_flow_sync_refreshes_up_to_four_profiles_concurrently():
+    service = FlowBridgeService(FakeAccountPool(), enabled=True, base_url="http://flow.example", secret="bridge-secret")
+    service.list_accounts = AsyncMock(return_value=[
+        {"flow_token_id": token_id, "gemini_sync_ready": True}
+        for token_id in range(1, 6)
+    ])
+    active = 0
+    peak = 0
+
+    async def refresh(token_id):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"success": True, "flow_token_id": token_id}
+
+    service.refresh_token = refresh
+    try:
+        result = await service.sync_accounts()
+    finally:
+        await service.aclose()
+
+    assert peak == 4
+    assert result["refreshed"] == 5
