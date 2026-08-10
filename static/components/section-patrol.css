@@ -18,6 +18,27 @@
 .patrol-stat-accent span, .patrol-stat-accent small { color: #b7cec8; }
 .patrol-stat-accent strong { color: var(--patrol-lime); }
 .patrol-stat-rate strong { color: var(--primary-color); }
+.patrol-breakdown-panel { margin-bottom: 1rem; }
+.patrol-breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.patrol-breakdown-group { overflow: hidden; border: 1px solid var(--border-color); border-radius: var(--radius-xl); background: var(--bg-secondary); }
+.patrol-breakdown-group > header { display: flex; align-items: center; gap: .75rem; padding: .85rem 1rem; border-bottom: 1px solid var(--border-color); background: var(--bg-primary); }
+.patrol-breakdown-group > header i { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-lg); background: var(--patrol-ink); color: var(--patrol-lime); }
+.patrol-breakdown-group > header div { display: flex; flex-direction: column; }
+.patrol-breakdown-group > header b { color: var(--text-primary); font-size: .86rem; }
+.patrol-breakdown-group > header small { color: var(--text-tertiary); font-size: .7rem; }
+.patrol-breakdown-list { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.patrol-breakdown-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem 1rem; padding: .8rem 1rem; border-bottom: 1px solid var(--border-color); }
+.patrol-breakdown-row:last-child { border-bottom: 0; }
+.patrol-breakdown-identity { min-width: 0; display: flex; flex-direction: column; }
+.patrol-breakdown-identity b, .patrol-breakdown-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.patrol-breakdown-identity b { color: var(--text-primary); font-size: .8rem; }
+.patrol-breakdown-identity small { color: var(--text-tertiary); font-size: .68rem; }
+.patrol-breakdown-score { text-align: right; font-variant-numeric: tabular-nums; }
+.patrol-breakdown-score b { display: block; color: var(--primary-color); font-size: 1rem; }
+.patrol-breakdown-score small { color: var(--text-tertiary); font-size: .65rem; }
+.patrol-breakdown-meter { grid-column: 1 / -1; height: 5px; overflow: hidden; border-radius: 999px; background: var(--border-color); }
+.patrol-breakdown-meter span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--primary-color), var(--patrol-lime)); }
+.patrol-breakdown-empty { padding: 2rem 1rem; text-align: center; color: var(--text-tertiary); font-size: .75rem; }
 .patrol-layout { display: grid; grid-template-columns: 1fr; gap: 1rem; }
 .patrol-panel { padding: 1.25rem; border: 1px solid var(--border-color); border-radius: var(--radius-xl); background: var(--bg-primary); box-shadow: var(--shadow-sm); }
 .patrol-library { margin-bottom: 1rem; }
@@ -128,5 +149,5 @@
 @keyframes patrol-pulse { 50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--primary-color) 8%, transparent); } }
 @media (max-width: 1050px) { .patrol-config-body { grid-template-columns: 1fr 1fr; } .patrol-config-column:last-child { grid-column: 1 / -1; } }
 @media (max-width: 1200px) { .patrol-stats { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 900px) { .patrol-stats { grid-template-columns: repeat(2, 1fr); } .patrol-heading { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 900px) { .patrol-stats { grid-template-columns: repeat(2, 1fr); } .patrol-breakdown-grid { grid-template-columns: 1fr; } .patrol-heading { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 650px) { .patrol-stats { grid-template-columns: 1fr; } .patrol-config-body { grid-template-columns: 1fr; } .patrol-config-column:last-child { grid-column: auto; } .patrol-history-panel .patrol-panel-title { align-items: flex-start; flex-direction: column; } .patrol-history-actions { width: 100%; flex-wrap: wrap; } .patrol-task { grid-template-columns: auto 1fr auto; } .patrol-task > span:nth-of-type(2), .patrol-task > span:nth-of-type(3), .patrol-task > span:nth-of-type(4) { display: none; } .patrol-task-response { grid-column: 1 / -1; } .patrol-task-info { grid-template-columns: 1fr; } .patrol-task-field.wide, .patrol-task-toolbar { grid-column: auto; } .patrol-round summary { grid-template-columns: auto auto 1fr auto; } .patrol-round-score { display: none; } .patrol-tasks { padding-left: 1.35rem; } .patrol-task-list-head { align-items: flex-start; flex-direction: column; } }

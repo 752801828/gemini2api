@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.core.log_store import create_log_record
 from app.utils.atomic_io import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -76,8 +77,9 @@ def _detect_image_mime(data: bytes) -> str | None:
 
 
 class PatrolService:
-    def __init__(self, account_pool, data_dir: str | Path = "data"):
+    def __init__(self, account_pool, data_dir: str | Path = "data", log_store=None):
         self.account_pool = account_pool
+        self.log_store = log_store
         self.data_dir = Path(data_dir)
         self.config_path = self.data_dir / "patrol_config.json"
         self.history_path = self.data_dir / "patrol_history.json"
@@ -391,6 +393,32 @@ class PatrolService:
             result["duration_ms"] = round((time.perf_counter() - started) * 1000)
             self.current["tasks"].append(result)
             self.current["success" if result["success"] else "failed"] += 1
+            if self.log_store:
+                record = create_log_record(
+                    method="PATROL",
+                    path=f"/patrol/{self.current['id']}/{result['account_id']}/{test_type}/{sequence}",
+                    direction="egress",
+                    model=result["model"] or None,
+                    status=200 if result["success"] else 502,
+                    latency_ms=result["duration_ms"],
+                    error=result["error"] or None,
+                    request_body={
+                        "round_id": self.current["id"],
+                        "account_id": result["account_id"],
+                        "account_label": result["account_label"],
+                        "type": test_type,
+                        "sequence": sequence,
+                        "prompt": result["prompt"],
+                        "image_count": len(result["image_samples"]),
+                    },
+                    response_body={
+                        "success": result["success"],
+                        "attempts": result["attempts"],
+                        "response_preview": result["response_preview"],
+                    },
+                )
+                record.tags = ["patrol", test_type, result["account_id"]]
+                self.log_store.add(record)
 
     async def _notify_feishu(self, round_data: dict) -> dict:
         return await self._send_feishu(self._notification_text(round_data), "patrol")
@@ -483,8 +511,9 @@ class PatrolService:
                 continue
         latest = self.current or (self.history[-1] if self.history else None)
 
-        def type_stats(task_type: str) -> dict:
-            tasks = [task for item in self.history for task in item.get("tasks", []) if task.get("type") == task_type]
+        all_tasks = [task for item in self.history for task in item.get("tasks", [])]
+
+        def task_stats(tasks: list[dict]) -> dict:
             success = sum(bool(task.get("success")) for task in tasks)
             total = len(tasks)
             durations = [task["duration_ms"] for task in tasks if isinstance(task.get("duration_ms"), (int, float))]
@@ -495,6 +524,16 @@ class PatrolService:
                 "rate": round(success * 100 / total, 1) if total else 0.0,
                 "avg_duration_ms": round(sum(durations) / len(durations)) if durations else 0,
             }
+
+        def grouped_stats(key: str, label_key: str | None = None) -> list[dict]:
+            groups: dict[str, dict] = {}
+            for task in all_tasks:
+                group_id = str(task.get(key) or ("unassigned" if key == "model" else "unknown"))
+                label = str(task.get(label_key) or group_id) if label_key else ("未分配模型" if group_id == "unassigned" else group_id)
+                group = groups.setdefault(group_id, {"id": group_id, "label": label, "items": []})
+                group["items"].append(task)
+            rows = [{"id": group["id"], "label": group["label"], **task_stats(group["items"])} for group in groups.values()]
+            return sorted(rows, key=lambda row: (-row["tasks"], row["label"]))
 
         return {
             "config": self.public_config(),
@@ -519,9 +558,11 @@ class PatrolService:
                     "success": sum(x.get("success", 0) for x in self.history),
                 },
                 "types": {
-                    "text": type_stats("text"),
-                    "image": type_stats("image"),
+                    "text": task_stats([task for task in all_tasks if task.get("type") == "text"]),
+                    "image": task_stats([task for task in all_tasks if task.get("type") == "image"]),
                 },
+                "accounts": grouped_stats("account_id", "account_label"),
+                "models": grouped_stats("model"),
             },
             "history": copy.deepcopy(list(reversed(self.history[-history_limit:]))),
         }

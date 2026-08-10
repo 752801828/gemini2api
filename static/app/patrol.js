@@ -11,6 +11,20 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'
 const localTime = value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
 const duration = ms => ms == null ? '—' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
 
+function renderBreakdown(id, rows) {
+    const container = document.getElementById(id);
+    if (!container) return;
+    container.innerHTML = rows.length ? rows.map(row => {
+        const rate = Math.max(0, Math.min(100, Number(row.rate) || 0));
+        const sublabel = `${row.id && row.id !== row.label ? `${row.id} · ` : ''}${row.success || 0} 成功 · ${row.failed || 0} 失败`;
+        return `<article class="patrol-breakdown-row">
+            <span class="patrol-breakdown-identity"><b title="${escapeHtml(row.label)}">${escapeHtml(row.label)}</b><small title="${escapeHtml(sublabel)}">${escapeHtml(sublabel)}</small></span>
+            <span class="patrol-breakdown-score"><b>${rate.toFixed(1)}%</b><small>${row.tasks || 0} 次 · 均耗时 ${duration(row.avg_duration_ms || 0)}</small></span>
+            <span class="patrol-breakdown-meter" aria-label="成功率 ${rate.toFixed(1)}%"><span style="width:${rate}%"></span></span>
+        </article>`;
+    }).join('') : '<div class="patrol-breakdown-empty">暂无盘巡数据</div>';
+}
+
 function render(data) {
     const { config, stats, current, history, images, running, next_run_at: next } = data;
     document.getElementById('patrol-enabled').checked = config.enabled;
@@ -39,6 +53,8 @@ function render(data) {
     text('patrol-text-rate-detail', `${textStats.success} / ${textStats.tasks} 成功 · 均耗时 ${duration(textStats.avg_duration_ms || 0)}`);
     text('patrol-image-rate', `${imageStats.rate}%`);
     text('patrol-image-rate-detail', `${imageStats.success} / ${imageStats.tasks} 成功 · 均耗时 ${duration(imageStats.avg_duration_ms || 0)}`);
+    renderBreakdown('patrol-account-stats', stats.accounts || []);
+    renderBreakdown('patrol-model-stats', stats.models || []);
 
     const livebar = document.getElementById('patrol-livebar');
     isRunning = running;

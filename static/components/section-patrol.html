@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="components/section-patrol.css?v=10">
+<link rel="stylesheet" href="components/section-patrol.css?v=11">
 <section id="patrol" class="section patrol-section" aria-labelledby="patrol-title">
     <div class="section-header patrol-heading">
         <div>
@@ -41,6 +41,22 @@
             <strong id="patrol-image-rate">0%</strong>
             <small id="patrol-image-rate-detail">0 / 0 成功 · 均耗时 0 ms</small>
         </article>
+    </div>
+
+    <div class="patrol-panel patrol-breakdown-panel">
+        <div class="patrol-panel-title">
+            <div><span>使用与成功率统计</span><small>按历史盘巡子任务聚合；删除轮次后统计会同步更新</small></div>
+        </div>
+        <div class="patrol-breakdown-grid">
+            <section class="patrol-breakdown-group" aria-labelledby="patrol-account-stats-title">
+                <header><i class="fas fa-user-shield"></i><div><b id="patrol-account-stats-title">按账号统计</b><small>账号任务量与稳定性</small></div></header>
+                <div id="patrol-account-stats" class="patrol-breakdown-list"><div class="patrol-breakdown-empty">暂无账号数据</div></div>
+            </section>
+            <section class="patrol-breakdown-group" aria-labelledby="patrol-model-stats-title">
+                <header><i class="fas fa-microchip"></i><div><b id="patrol-model-stats-title">按模型统计</b><small>模型调用量与成功率</small></div></header>
+                <div id="patrol-model-stats" class="patrol-breakdown-list"><div class="patrol-breakdown-empty">暂无模型数据</div></div>
+            </section>
+        </div>
     </div>
 
     <div class="patrol-panel patrol-library">

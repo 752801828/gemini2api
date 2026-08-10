@@ -3,6 +3,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from app.core.log_store import LogStore
 from app.core.patrol import IMAGE_PROMPTS, TEXT_PROMPTS, PatrolService
 from app.routers.patrol import PatrolConfigUpdate
 
@@ -184,3 +185,39 @@ def test_patrol_type_stats_include_average_subtask_duration(tmp_path):
 
     assert stats["text"]["avg_duration_ms"] == 200
     assert stats["image"]["avg_duration_ms"] == 500
+
+
+def test_patrol_stats_group_tasks_by_account_and_model(tmp_path):
+    service = PatrolService(FakePool(), tmp_path)
+    service.history = [{
+        "tasks": [
+            {"account_id": "a1", "account_label": "主账号", "model": "gemini-flash", "success": True, "duration_ms": 100},
+            {"account_id": "a1", "account_label": "主账号", "model": "gemini-pro", "success": False, "duration_ms": 300},
+            {"account_id": "a2", "account_label": "备用账号", "model": "gemini-flash", "success": True, "duration_ms": 500},
+        ]
+    }]
+
+    stats = service.overview()["stats"]
+
+    assert stats["accounts"][0] == {
+        "id": "a1", "label": "主账号", "tasks": 2, "success": 1,
+        "failed": 1, "rate": 50.0, "avg_duration_ms": 200,
+    }
+    assert stats["models"][0] == {
+        "id": "gemini-flash", "label": "gemini-flash", "tasks": 2,
+        "success": 2, "failed": 0, "rate": 100.0, "avg_duration_ms": 300,
+    }
+
+
+def test_patrol_tasks_are_written_to_realtime_log_store(tmp_path):
+    log_store = LogStore(persist_path=str(tmp_path / "logs.json"))
+    service = PatrolService(FakePool(), tmp_path, log_store=log_store)
+    service.add_image("one.png", PNG)
+
+    asyncio.run(service._run_round("round-log", "manual"))
+
+    records = log_store.query(limit=10, search="/patrol/")["records"]
+    assert len(records) == 2
+    assert all(record["method"] == "PATROL" for record in records)
+    assert all(record["request"]["round_id"] == "round-log" for record in records)
+    assert {record["model"] for record in records} == {"gemini-flash"}
