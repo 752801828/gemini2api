@@ -1,11 +1,17 @@
-<link rel="stylesheet" href="components/section-accounts.css?v=7">
+<link rel="stylesheet" href="components/section-accounts.css?v=8">
 <!-- Accounts Section -->
 <section id="accounts" class="section" aria-labelledby="accounts-title">
     <div class="section-header">
         <h2 id="accounts-title" data-i18n="accounts.title">账号管理</h2>
-        <button class="btn btn-primary" id="addAccountBtn">
-            <i class="fas fa-plus"></i> <span data-i18n="accounts.add">添加账号</span>
-        </button>
+        <div class="account-header-actions">
+            <span id="flowBridgeState" class="flow-bridge-state">Flow 状态检测中</span>
+            <button class="btn btn-outline" id="syncFlowBridgeBtn">
+                <i class="fas fa-cloud-arrow-down"></i> 从 Flow 选择同步
+            </button>
+            <button class="btn btn-primary" id="addAccountBtn">
+                <i class="fas fa-plus"></i> <span data-i18n="accounts.add">添加账号</span>
+            </button>
+        </div>
     </div>
 
     <!-- Accounts Grid -->
@@ -40,6 +46,32 @@
         <div class="modal-footer">
             <button class="btn btn-secondary modal-cancel" data-i18n="confirm.cancel">取消</button>
             <button class="btn btn-primary" id="confirmAddAccount" data-i18n="accounts.confirmAdd">确认添加</button>
+        </div>
+    </div>
+</div>
+
+<!-- Select Flow Accounts Modal -->
+<div id="flowSyncModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="flowSyncTitle">
+    <div class="modal-content flow-sync-modal-content">
+        <div class="modal-header">
+            <div>
+                <h3 id="flowSyncTitle">从 Flow 同步账号</h3>
+                <p class="flow-sync-subtitle">Flow 业务启用状态与 Gemini 同步互不影响</p>
+            </div>
+            <button class="modal-close" aria-label="关闭"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="flow-sync-toolbar">
+            <span id="flowSyncSummary">正在加载账号…</span>
+            <button type="button" class="flow-sync-select-all">全选可同步账号</button>
+        </div>
+        <div class="modal-body flow-sync-list" id="flowSyncList">
+            <div class="flow-sync-loading"><i class="fas fa-spinner fa-spin"></i> 正在读取 Flow 账号</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary modal-cancel">取消</button>
+            <button class="btn btn-primary" id="confirmFlowSync" disabled>
+                <i class="fas fa-arrows-rotate"></i> 同步所选账号
+            </button>
         </div>
     </div>
 </div>

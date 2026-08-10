@@ -97,7 +97,7 @@ async def test_flow_refresh_failure_notifies_maintenance():
 
 
 @pytest.mark.asyncio
-async def test_disabled_flow_account_is_marked_disabled_without_flow_alert():
+async def test_flow_business_disable_does_not_disable_gemini_account():
     pool = FakeAccountPool()
     account = SimpleNamespace(
         id="flow-18",
@@ -119,5 +119,28 @@ async def test_disabled_flow_account_is_marked_disabled_without_flow_alert():
     finally:
         await service.aclose()
 
-    assert account.status == AccountStatus.DISABLED
-    notifier.assert_not_awaited()
+    assert account.status == AccountStatus.ACTIVE
+    notifier.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sync_accounts_only_refreshes_selected_ready_profiles():
+    service = FlowBridgeService(
+        FakeAccountPool(),
+        enabled=True,
+        base_url="http://flow.example",
+        secret="bridge-secret",
+    )
+    service.list_accounts = AsyncMock(return_value=[
+        {"flow_token_id": 7, "flow_enabled": False, "auth_ready": True, "profile_id": "profile-7"},
+        {"flow_token_id": 8, "flow_enabled": True, "auth_ready": True, "profile_id": "profile-8"},
+    ])
+    service.refresh_token = AsyncMock(return_value={"success": True, "flow_token_id": 7})
+    try:
+        result = await service.sync_accounts([7])
+    finally:
+        await service.aclose()
+
+    service.refresh_token.assert_awaited_once_with(7)
+    assert result["available"] == 1
+    assert result["refreshed"] == 1

@@ -77,7 +77,7 @@ async function loadSectionData(sectionId) {
                 await loadDashboard();
                 break;
             case 'accounts':
-                await loadAccounts();
+                await Promise.all([loadAccounts(), loadFlowBridgeStatus()]);
                 break;
             case 'usage-stats':
                 await loadUsageStats();
@@ -330,10 +330,72 @@ async function loadFlowBridgeStatus() {
     }
 }
 
-async function syncFlowBridgeAccounts(button = null) {
+function closeFlowSyncModal() {
+    document.getElementById('flowSyncModal')?.classList.remove('active');
+}
+
+function updateFlowSyncSelection() {
+    const modal = document.getElementById('flowSyncModal');
+    const checked = modal?.querySelectorAll('.flow-sync-account input:checked').length || 0;
+    const confirm = document.getElementById('confirmFlowSync');
+    const summary = document.getElementById('flowSyncSummary');
+    if (confirm) confirm.disabled = checked === 0;
+    if (summary) summary.textContent = checked ? `已选择 ${checked} 个账号` : '请选择需要同步的账号';
+}
+
+function renderFlowSyncAccounts(accounts) {
+    const list = document.getElementById('flowSyncList');
+    if (!list) return;
+    if (!accounts.length) {
+        list.innerHTML = '<div class="flow-sync-empty">Flow 中暂无账号</div>';
+        updateFlowSyncSelection();
+        return;
+    }
+    list.innerHTML = accounts.map(account => {
+        const ready = Boolean(account.gemini_sync_ready ?? (account.auth_ready && account.profile_id));
+        const flowEnabled = Boolean(account.flow_enabled ?? account.enabled);
+        const tokenId = Number(account.flow_token_id || 0);
+        return `<label class="flow-sync-account${ready ? '' : ' unavailable'}">
+            <input type="checkbox" value="${tokenId}" ${ready ? '' : 'disabled'}>
+            <span class="flow-sync-identity">
+                <strong>${escapeHtml(account.name || account.email || `Flow #${tokenId}`)}</strong>
+                <small>${escapeHtml(account.email || '未提供邮箱')} · flow-${tokenId}</small>
+            </span>
+            <span class="flow-sync-tags">
+                <span class="flow-sync-tag ${flowEnabled ? 'business-on' : 'business-off'}">${flowEnabled ? 'Flow 业务启用' : 'Flow 业务禁用'}</span>
+                ${ready ? '' : '<span class="flow-sync-tag profile-off">浏览器未就绪</span>'}
+            </span>
+        </label>`;
+    }).join('');
+    list.querySelectorAll('input').forEach(input => input.addEventListener('change', updateFlowSyncSelection));
+    updateFlowSyncSelection();
+}
+
+async function openFlowSyncModal(button = null) {
+    const modal = document.getElementById('flowSyncModal');
+    const list = document.getElementById('flowSyncList');
+    if (!modal || !list) return;
+    modal.classList.add('active');
+    list.innerHTML = '<div class="flow-sync-loading"><i class="fas fa-spinner fa-spin"></i> 正在读取 Flow 账号</div>';
     if (button) button.disabled = true;
     try {
-        const result = await apiCall('POST', '/admin/flow-bridge/sync');
+        const result = await apiCall('GET', '/admin/flow-bridge/accounts');
+        renderFlowSyncAccounts(result.accounts || []);
+    } catch (error) {
+        list.innerHTML = `<div class="flow-sync-empty">读取失败：${escapeHtml(error.message)}</div>`;
+        showToast(`读取 Flow 账号失败：${error.message}`, 'error');
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function syncFlowBridgeAccounts(button = null) {
+    const ids = [...document.querySelectorAll('#flowSyncList input:checked')].map(input => Number(input.value));
+    if (!ids.length) return;
+    if (button) button.disabled = true;
+    try {
+        const result = await apiCall('POST', '/admin/flow-bridge/sync', { flow_token_ids: ids });
+        closeFlowSyncModal();
         showToast(`Flow 同步完成：成功 ${result.refreshed || 0}，失败 ${result.failed || 0}`, result.failed ? 'warning' : 'success');
         await Promise.all([loadAccounts(), loadDashboard(), loadFlowBridgeStatus()]);
     } catch (error) {
@@ -1270,7 +1332,25 @@ function initEventListeners() {
 
     const syncFlowBridgeBtn = document.getElementById('syncFlowBridgeBtn');
     if (syncFlowBridgeBtn) {
-        syncFlowBridgeBtn.addEventListener('click', () => syncFlowBridgeAccounts(syncFlowBridgeBtn));
+        syncFlowBridgeBtn.addEventListener('click', () => openFlowSyncModal(syncFlowBridgeBtn));
+    }
+
+    const flowSyncModal = document.getElementById('flowSyncModal');
+    if (flowSyncModal) {
+        flowSyncModal.querySelectorAll('.modal-close, .modal-cancel').forEach(btn => {
+            btn.addEventListener('click', closeFlowSyncModal);
+        });
+        flowSyncModal.addEventListener('click', event => {
+            if (event.target === flowSyncModal) closeFlowSyncModal();
+        });
+        flowSyncModal.querySelector('.flow-sync-select-all')?.addEventListener('click', () => {
+            flowSyncModal.querySelectorAll('.flow-sync-account input:not(:disabled)').forEach(input => {
+                input.checked = true;
+            });
+            updateFlowSyncSelection();
+        });
+        const confirmFlowSync = document.getElementById('confirmFlowSync');
+        confirmFlowSync?.addEventListener('click', () => syncFlowBridgeAccounts(confirmFlowSync));
     }
 
     // Check update button

@@ -9,7 +9,6 @@ from uuid import uuid4
 import httpx
 
 from app.config import settings
-from app.core.account_pool import AccountStatus
 
 
 class FlowBridgeError(RuntimeError):
@@ -122,15 +121,6 @@ class FlowBridgeService:
                     raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
                 return {"success": True, "account_id": account.id, "flow_token_id": token_id}
             except Exception as error:
-                if isinstance(error, FlowBridgeError) and (
-                    error.error_type in {"account_disabled", "token_disabled", "disabled"}
-                    or "account is disabled" in str(error).lower()
-                ):
-                    account = self.account_pool.get_flow_account(token_id)
-                    if account is not None:
-                        account.status = AccountStatus.DISABLED
-                        account.last_error = str(error)[:300]
-                    raise
                 await self._notify_failure(token_id, error)
                 raise
 
@@ -139,11 +129,22 @@ class FlowBridgeService:
             raise FlowBridgeError("not_flow_account", "Only Flow-backed accounts can use this refresh", 409)
         return await self.refresh_token(account.flow_token_id)
 
-    async def sync_accounts(self) -> dict:
+    async def sync_accounts(self, flow_token_ids: list[int] | None = None) -> dict:
         rows = await self.list_accounts()
+        selected_ids = {int(token_id) for token_id in flow_token_ids or [] if int(token_id) > 0}
+        if flow_token_ids is not None:
+            rows = [row for row in rows if int(row.get("flow_token_id") or 0) in selected_ids]
         results = []
         for row in rows:
-            if not row.get("enabled", True) or not row.get("auth_ready") or not row.get("profile_id"):
+            ready = row.get("gemini_sync_ready")
+            if ready is None:
+                ready = row.get("auth_ready") and row.get("profile_id")
+            if not ready:
+                results.append({
+                    "success": False,
+                    "flow_token_id": row.get("flow_token_id"),
+                    "error": "Flow browser profile is not ready",
+                })
                 continue
             try:
                 results.append(await self.refresh_token(int(row.get("flow_token_id"))))

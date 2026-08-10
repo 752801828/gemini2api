@@ -424,7 +424,7 @@ class PatrolService:
             "状态：从 Flow 获取 Cookie 失败",
             f"原因：{error[:300]}",
             f"时间：{datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
-            "处理：请检查 Flow 账号状态；如已禁用，请重新启用后同步账号。",
+            "处理：请检查该账号的 Flow 浏览器 Profile 登录状态；Flow 业务禁用不影响 CK 同步。",
         ])
         return await self._send_feishu(text, "flow maintenance")
 

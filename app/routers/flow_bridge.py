@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, PositiveInt
 
 from app.core.flow_bridge import FlowBridgeError, FlowBridgeService
 
@@ -11,6 +12,10 @@ from app.core.flow_bridge import FlowBridgeError, FlowBridgeService
 internal_router = APIRouter(prefix="/internal/flow-bridge", tags=["Flow bridge"])
 admin_router = APIRouter(prefix="/admin/flow-bridge", tags=["Flow bridge admin"])
 _service: FlowBridgeService | None = None
+
+
+class FlowSyncRequest(BaseModel):
+    flow_token_ids: list[PositiveInt] | None = Field(default=None, max_length=200)
 
 
 def set_service(service: FlowBridgeService) -> None:
@@ -60,10 +65,18 @@ async def status():
     }
 
 
-@admin_router.post("/sync")
-async def sync_accounts():
+@admin_router.get("/accounts")
+async def list_accounts():
     try:
-        return await _get_service().sync_accounts()
+        return {"accounts": await _get_service().list_accounts()}
+    except FlowBridgeError as error:
+        return _error(error)
+
+
+@admin_router.post("/sync")
+async def sync_accounts(payload: FlowSyncRequest | None = None):
+    try:
+        return await _get_service().sync_accounts(payload.flow_token_ids if payload else None)
     except FlowBridgeError as error:
         return _error(error)
 
