@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import secrets
 from types import SimpleNamespace
 from typing import Optional
@@ -111,22 +112,29 @@ class FlowBridgeService:
             raise FlowBridgeError("invalid_mapping", "Invalid Flow token id", 422)
         lock = self._locks.setdefault(token_id, asyncio.Lock())
         async with lock:
-            try:
-                request_id = uuid4().hex
-                result = await self._request(
-                    "POST",
-                    f"/api/gemini-bridge/accounts/{token_id}/refresh",
-                    {"request_id": request_id},
-                )
-                if result.get("request_id") and result.get("request_id") != request_id:
-                    raise FlowBridgeError("request_mismatch", "Flow returned mismatched refresh metadata", 409)
-                account = self.account_pool.get_flow_account(token_id)
-                if account is None:
-                    raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
-                return {"success": True, "account_id": account.id, "flow_token_id": token_id}
-            except Exception as error:
-                await self._notify_failure(token_id, error)
-                raise
+            request_id = uuid4().hex
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    result = await self._request(
+                        "POST",
+                        f"/api/gemini-bridge/accounts/{token_id}/refresh",
+                        {"request_id": request_id},
+                    )
+                    if result.get("request_id") and result.get("request_id") != request_id:
+                        raise FlowBridgeError("request_mismatch", "Flow returned mismatched refresh metadata", 409)
+                    account = self.account_pool.get_flow_account(token_id)
+                    if account is None:
+                        raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
+                    return {"success": True, "account_id": account.id, "flow_token_id": token_id}
+                except Exception as error:
+                    last_error = error
+                    if attempt < 2:
+                        await asyncio.sleep(random.uniform(2, 5))
+
+            assert last_error is not None
+            await self._notify_failure(token_id, last_error)
+            raise last_error
 
     async def refresh_account(self, account) -> dict:
         if account.source != "flow" or not account.flow_token_id:

@@ -73,7 +73,7 @@ async def test_empty_gemini_response_retries_before_returning(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_flow_refresh_failure_notifies_maintenance():
+async def test_flow_refresh_retries_three_times_before_notifying_maintenance(monkeypatch):
     pool = FakeAccountPool()
     service = FlowBridgeService(
         pool,
@@ -85,12 +85,18 @@ async def test_flow_refresh_failure_notifies_maintenance():
     notifier = AsyncMock(return_value={"sent": True})
     service.set_failure_notifier(notifier)
     service._request = AsyncMock(side_effect=FlowBridgeError("profile_not_ready", "login required", 409))
+    sleep = AsyncMock()
+    delays = iter([2.0, 5.0])
+    monkeypatch.setattr("app.core.flow_bridge.asyncio.sleep", sleep)
+    monkeypatch.setattr("app.core.flow_bridge.random.uniform", lambda _minimum, _maximum: next(delays))
     try:
         with pytest.raises(FlowBridgeError):
             await service.refresh_token(9)
     finally:
         await service.aclose()
 
+    assert service._request.await_count == 3
+    assert [call.args[0] for call in sleep.await_args_list] == [2.0, 5.0]
     notifier.assert_awaited_once()
     account, error = notifier.await_args.args
     assert account.id == "flow-9"
@@ -98,7 +104,7 @@ async def test_flow_refresh_failure_notifies_maintenance():
 
 
 @pytest.mark.asyncio
-async def test_flow_business_disable_does_not_disable_gemini_account():
+async def test_flow_business_disable_does_not_disable_gemini_account(monkeypatch):
     pool = FakeAccountPool()
     account = SimpleNamespace(
         id="flow-18",
@@ -114,6 +120,7 @@ async def test_flow_business_disable_does_not_disable_gemini_account():
     notifier = AsyncMock(return_value={"sent": True})
     service.set_failure_notifier(notifier)
     service._request = AsyncMock(side_effect=FlowBridgeError("account_disabled", "Flow account is disabled", 409))
+    monkeypatch.setattr("app.core.flow_bridge.asyncio.sleep", AsyncMock())
     try:
         with pytest.raises(FlowBridgeError, match="disabled"):
             await service.refresh_token(18)
