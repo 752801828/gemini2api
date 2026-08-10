@@ -144,3 +144,20 @@ async def test_sync_accounts_only_refreshes_selected_ready_profiles():
     service.refresh_token.assert_awaited_once_with(7)
     assert result["available"] == 1
     assert result["refreshed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_flow_account_list_marks_existing_mappings_as_synced():
+    pool = FakeAccountPool()
+    pool.accounts[7] = SimpleNamespace(id="flow-7")
+    service = FlowBridgeService(pool, enabled=True, base_url="http://flow.example", secret="bridge-secret")
+    service._request = AsyncMock(return_value={"accounts": [
+        {"flow_token_id": 7},
+        {"flow_token_id": 8},
+    ]})
+    try:
+        accounts = await service.list_accounts()
+    finally:
+        await service.aclose()
+
+    assert [account["synced"] for account in accounts] == [True, False]

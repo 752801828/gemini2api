@@ -356,7 +356,7 @@ function renderFlowSyncAccounts(accounts) {
         const flowEnabled = Boolean(account.flow_enabled ?? account.enabled);
         const tokenId = Number(account.flow_token_id || 0);
         return `<label class="flow-sync-account${ready ? '' : ' unavailable'}">
-            <input type="checkbox" value="${tokenId}" ${ready ? '' : 'disabled'}>
+            <input type="checkbox" value="${tokenId}" ${ready && account.synced ? 'checked' : ''} ${ready ? '' : 'disabled'}>
             <span class="flow-sync-identity">
                 <strong>${escapeHtml(account.name || account.email || `Flow #${tokenId}`)}</strong>
                 <small>${escapeHtml(account.email || '未提供邮箱')} · flow-${tokenId}</small>

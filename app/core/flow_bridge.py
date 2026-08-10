@@ -99,7 +99,11 @@ class FlowBridgeService:
 
     async def list_accounts(self) -> list[dict]:
         body = await self._request("GET", "/api/gemini-bridge/accounts")
-        return [item for item in body.get("accounts", []) if isinstance(item, dict)]
+        accounts = [item for item in body.get("accounts", []) if isinstance(item, dict)]
+        for account in accounts:
+            token_id = int(account.get("flow_token_id") or 0)
+            account["synced"] = bool(token_id and self.account_pool.get_flow_account(token_id))
+        return accounts
 
     async def refresh_token(self, flow_token_id: int) -> dict:
         token_id = int(flow_token_id)
