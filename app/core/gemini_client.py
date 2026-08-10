@@ -491,6 +491,23 @@ class GeminiWebClient:
     def _get_headers(self, method: str = "GET", content_type: str | None = None) -> dict:
         return dict(header_builder.build(url=GEMINI_APP_URL, method=method, content_type=content_type))
 
+    async def _upload_attachments(self, attachments: list, cookies: dict, base_headers: dict,
+                                  upload_cache: dict | None = None) -> list[tuple[str, str]]:
+        if upload_cache is not None and "file_ids" in upload_cache:
+            return upload_cache["file_ids"]
+        from app.core.file_upload import upload_files
+        started = time.perf_counter()
+        file_ids = await upload_files(
+            self._http, cookies, base_headers, self._push_id, attachments
+        )
+        if upload_cache is not None:
+            upload_cache["duration_ms"] = upload_cache.get("duration_ms", 0) + round(
+                (time.perf_counter() - started) * 1000
+            )
+            if len(file_ids) == len(attachments):
+                upload_cache["file_ids"] = file_ids
+        return file_ids
+
     async def check_account(self) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         try:
@@ -1077,13 +1094,24 @@ class GeminiWebClient:
             )
 
         last_err = None
+        request_started = time.perf_counter()
+        upload_cache = {} if attachments else None
         # 5xx（含 Google 503 限流）同账号只快速重试少量次，不长退避空耗；
         # 仍失败则抛出（带 status_code），由 account_pool 换账号 failover。
         max_5xx = max(0, settings.same_account_5xx_retries)
         total_attempts = min(2, max(1, settings.max_retries))
         for attempt in range(total_attempts):
             try:
-                result = await self._send_request(prompt, model, conversation_id, attachments, gem_id)
+                result = await self._send_request(
+                    prompt, model, conversation_id, attachments, gem_id, upload_cache
+                )
+                upload_duration_ms = upload_cache.get("duration_ms", 0) if upload_cache else 0
+                total_duration_ms = round((time.perf_counter() - request_started) * 1000)
+                result["_timing"] = {
+                    "upload_duration_ms": upload_duration_ms,
+                    "model_duration_ms": max(0, total_duration_ms - upload_duration_ms),
+                    "attempts": attempt + 1,
+                }
                 if not str(result.get("text", "")).strip() and not result.get("images"):
                     raise RuntimeError("Gemini returned HTTP 200 with empty content")
                 return result
@@ -1149,11 +1177,8 @@ class GeminiWebClient:
         # 附件上传仍复用共享 session 的逻辑（与对话同账号同会话），上传完再走流式对话
         file_ids = None
         if attachments:
-            from app.core.file_upload import upload_files
             base_headers = self._get_headers("POST")
-            file_ids = await upload_files(
-                self._http, cookies, base_headers, self._push_id, attachments
-            )
+            file_ids = await self._upload_attachments(attachments, cookies, base_headers)
             if not file_ids:
                 logger.warning("All attachment uploads failed, streaming text-only")
 
@@ -1271,7 +1296,8 @@ class GeminiWebClient:
         }
 
     async def _send_request(self, prompt: str, model: str, conversation_id: str = "",
-                           attachments: list | None = None, gem_id: str | None = None) -> dict:
+                           attachments: list | None = None, gem_id: str | None = None,
+                           upload_cache: dict | None = None) -> dict:
         await apply_jitter("api_call")
         await self._ensure_session_current()
         self._clear_session_cookies()
@@ -1282,13 +1308,13 @@ class GeminiWebClient:
         # 上传附件（与对话同账号同会话），拿到文件标识符
         file_ids = None
         if attachments:
-            from app.core.file_upload import upload_files
             base_headers = self._get_headers("POST")
-            file_ids = await upload_files(
-                self._http, cookies, base_headers, self._push_id, attachments
+            file_ids = await self._upload_attachments(
+                attachments, cookies, base_headers, upload_cache
             )
             if not file_ids:
-                logger.warning("All attachment uploads failed, falling back to text-only")
+                raise RuntimeError("All attachment uploads failed")
+            self._clear_session_cookies()
 
         encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
         form_data = {"at": self._session_token, "f.req": encoded}

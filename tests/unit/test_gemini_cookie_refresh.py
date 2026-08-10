@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core import gemini_client as client_module
+from app.core.fingerprint import cookie_jar as cookie_jar_module
+from app.core.fingerprint.cookie_jar import PersistentCookieJar
 from app.core.gemini_client import GEMINI_APP_EN_URL, GeminiWebClient
 
 
@@ -78,3 +80,37 @@ async def test_invalid_cookie_triggers_bound_browser_profile():
     assert result["valid"] is True
     assert result["browser_refreshed"] is True
     refresh.assert_awaited_once()
+
+
+def test_response_cookie_update_ignores_content_push_duplicate_nid(tmp_path, monkeypatch):
+    from curl_cffi.requests import Cookies
+
+    monkeypatch.setattr(cookie_jar_module, "COOKIE_STORE_DIR", tmp_path)
+    cookies = Cookies()
+    cookies.set("NID", "google-nid", domain=".google.com")
+    cookies.set("NID", "upload-nid", domain="content-push.googleapis.com")
+    response = type("Response", (), {"cookies": cookies, "headers": {}})()
+    jar = PersistentCookieJar("account-a")
+
+    jar.update_from_response(response)
+
+    assert jar.get("NID") == "google-nid"
+
+
+@pytest.mark.asyncio
+async def test_attachment_upload_cache_reuses_complete_upload(monkeypatch):
+    upload = AsyncMock(return_value=[("file-1", "one.png"), ("file-2", "two.png")])
+    monkeypatch.setattr("app.core.file_upload.upload_files", upload)
+    client = GeminiWebClient.__new__(GeminiWebClient)
+    client._http = object()
+    client._push_id = "push-id"
+    attachments = [{"filename": "one.png"}, {"filename": "two.png"}]
+    cache = {}
+
+    first = await client._upload_attachments(attachments, {}, {}, cache)
+    second = await client._upload_attachments(attachments, {}, {}, cache)
+
+    assert first == second
+    assert cache["file_ids"] == first
+    assert cache["duration_ms"] >= 0
+    upload.assert_awaited_once()

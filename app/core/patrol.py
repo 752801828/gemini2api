@@ -336,6 +336,9 @@ class PatrolService:
                 "sequence": sequence,
                 "success": False,
                 "duration_ms": 0,
+                "upload_duration_ms": None,
+                "model_duration_ms": None,
+                "attempts": None,
                 "response": "",
                 "response_preview": "",
                 "error": "",
@@ -374,6 +377,10 @@ class PatrolService:
                     account_id=account.get("id"),
                 )
                 text = str(response.get("text", "")).strip()
+                timing = response.get("_timing") if isinstance(response.get("_timing"), dict) else {}
+                result["upload_duration_ms"] = timing.get("upload_duration_ms")
+                result["model_duration_ms"] = timing.get("model_duration_ms")
+                result["attempts"] = timing.get("attempts")
                 result["success"] = bool(text)
                 result["response"] = text
                 result["response_preview"] = text[:300]

@@ -51,7 +51,17 @@ class PersistentCookieJar:
         if not hasattr(response, "cookies"):
             return
         changed = False
-        for name, value in response.cookies.items():
+        raw_jar = getattr(response.cookies, "jar", None)
+        cookie_rows = (
+            ((cookie.name, cookie.value, cookie.domain or ".google.com") for cookie in raw_jar)
+            if raw_jar is not None
+            else ((name, value, ".google.com") for name, value in response.cookies.items())
+        )
+        for name, value, domain in cookie_rows:
+            # content-push.googleapis.com may issue its own NID. Persisting it alongside
+            # .google.com NID makes curl_cffi's name-only lookup raise CookieConflict.
+            if domain and domain != "google.com" and not domain.endswith(".google.com"):
+                continue
             with self._lock:
                 # 空值视为服务端删除指令：删除而非用空值覆盖有效凭据 Cookie。
                 if not value:
@@ -64,7 +74,7 @@ class PersistentCookieJar:
                     self._cookies[name] = StoredCookie(
                         name=name,
                         value=value,
-                        domain=".google.com",
+                        domain=domain,
                         secure=name.startswith("__Secure"),
                     )
                     changed = True

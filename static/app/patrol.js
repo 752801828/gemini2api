@@ -118,6 +118,7 @@ function renderRound(round, imageLookup, roundIndex) {
                 <div class="patrol-task-field"><span>任务</span><p>${typeLabel}测试 #${task.sequence || 1}</p></div>
                 <div class="patrol-task-field"><span>模型</span><p>${escapeHtml(task.model || '-')}</p></div>
                 <div class="patrol-task-field"><span>状态 / 耗时</span><p class="${task.success ? 'patrol-ok' : 'patrol-bad'}">${task.success ? '成功' : '失败'} · ${duration(task.duration_ms)}</p></div>
+                ${task.attempts ? `<div class="patrol-task-field"><span>阶段耗时</span><p>上传 ${duration(task.upload_duration_ms || 0)} · 模型与重试 ${duration(task.model_duration_ms || 0)} · ${task.attempts} 次尝试</p></div>` : ''}
                 <div class="patrol-task-field wide"><span>随机问题</span><p>${escapeHtml(task.prompt || '-')}</p></div>
                 ${imageItems.length ? `<div class="patrol-task-field wide"><span>选中图片（${imageItems.length} 张）</span><div class="patrol-task-images">${imageItems.map(image => image.id ? `<figure><img data-patrol-image="${escapeHtml(image.id)}" alt="${escapeHtml(image.name)}"><figcaption>${escapeHtml(image.name)}</figcaption></figure>` : `<div class="patrol-task-image-missing"><i class="fas fa-image"></i>${escapeHtml(image.name)}</div>`).join('')}</div></div>` : ''}
                 <div class="patrol-task-field wide"><span>${task.success ? `模型响应（${detailText.length} 字）` : '错误信息'}</span><pre class="patrol-task-full-response">${escapeHtml(detailText)}</pre>${legacyPreview ? '<small class="patrol-response-note">此旧任务当时只保存了 300 字预览；新任务会完整保存。</small>' : ''}</div>
