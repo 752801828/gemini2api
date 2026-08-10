@@ -212,9 +212,10 @@ class AccountPool:
                 self._bg_tasks.add(task)
                 task.add_done_callback(self._bg_tasks.discard)
 
-    def _find_available(self, exclude: set | None = None) -> Account | None:
+    def _find_available(self, exclude: set | None = None, preferred_id: str | None = None) -> Account | None:
         """在已持有 self._cond 锁的前提下，挑一个未满载的 ACTIVE 账号；没有则返回 None。
         exclude: 本次 failover 中已试过失败的账号 id，跳过。
+        preferred_id: 优先选择的账号；不可用时直接选择其他空闲账号。
         冷却中的账号（被 5xx 限流）降级为兜底：优先选非冷却的，全冷却了才选冷却的。
         """
         exclude = exclude or set()
@@ -230,6 +231,10 @@ class AccountPool:
             return None
         fresh = [a for a in candidates if a.cooldown_until <= now]
         pool = fresh if fresh else candidates  # 优先非冷却；全冷却则用冷却的兜底
+        if preferred_id:
+            preferred = next((a for a in pool if a.id == preferred_id), None)
+            if preferred is not None:
+                return preferred
         if self._strategy == RotationStrategy.ROUND_ROBIN:
             return self._pick_round_robin(pool)
         return self._pick_failover(pool)
@@ -247,12 +252,12 @@ class AccountPool:
                 except Exception:
                     pass
 
-    async def acquire(self, exclude: set | None = None) -> Account:
+    async def acquire(self, exclude: set | None = None, preferred_id: str | None = None) -> Account:
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self._acquire_timeout
         async with self._cond:
             while True:
-                account = self._find_available(exclude)
+                account = self._find_available(exclude, preferred_id)
                 if account is not None:
                     account.active_requests += 1
                     account.last_used = datetime.now(timezone.utc)
@@ -270,7 +275,7 @@ class AccountPool:
                 has_active = any(a.status == AccountStatus.ACTIVE for a in self._accounts)
                 if not has_active:
                     await self._try_recover_expired()
-                    account = self._find_available()
+                    account = self._find_available(preferred_id=preferred_id)
                     if account is not None:
                         account.active_requests += 1
                         account.last_used = datetime.now(timezone.utc)
@@ -738,23 +743,19 @@ class AccountPool:
         if account_id:
             if self._get_account(account_id) is None:
                 raise ValueError(f"Account {account_id} not found")
-            tried.update({a.id for a in self._accounts if a.id != account_id})
         last_err = None
         account_attempts = 0
         while True:
             try:
-                account = await self.acquire(exclude=tried if tried else None)
+                if account_id:
+                    account = await self.acquire(exclude=tried if tried else None, preferred_id=account_id)
+                else:
+                    account = await self.acquire(exclude=tried if tried else None)
             except RuntimeError:
                 # 没有（更多）账号可用：抛出最后一次可重试错误（若有），否则抛 acquire 的错
                 if last_err is not None:
                     live_metrics.record_request(model, (time.time() - request_started) * 1000)
                     raise last_err
-                # 锁定账号场景：其它账号已被全部 exclude，acquire 报「无更多账号可故障切换」
-                # 其实是绑定账号本身不可用（expired/busy/cooldown），换更准确的文案。
-                if account_id:
-                    raise RuntimeError(
-                        f"Pinned gem account '{account_id}' unavailable (expired/busy/cooldown)"
-                    )
                 raise
             account_attempts += 1
             released = False
@@ -804,21 +805,18 @@ class AccountPool:
         if account_id:
             if self._get_account(account_id) is None:
                 raise ValueError(f"Account {account_id} not found")
-            tried.update({a.id for a in self._accounts if a.id != account_id})
         last_err = None
         account_attempts = 0
         while True:
             try:
-                account = await self.acquire(exclude=tried if tried else None)
+                if account_id:
+                    account = await self.acquire(exclude=tried if tried else None, preferred_id=account_id)
+                else:
+                    account = await self.acquire(exclude=tried if tried else None)
             except RuntimeError:
                 if last_err is not None:
                     live_metrics.record_request(model, (time.time() - request_started) * 1000)
                     raise last_err
-                # 锁定账号场景：其它账号已被全部 exclude，真实原因是绑定账号本身不可用
-                if account_id:
-                    raise RuntimeError(
-                        f"Pinned gem account '{account_id}' unavailable (expired/busy/cooldown)"
-                    )
                 raise
             account_attempts += 1
             emitted_any = False

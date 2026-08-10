@@ -8,6 +8,8 @@ from app.core.account_pool import Account, AccountPool, AccountStatus
 
 
 class _FakeClient:
+    is_healthy = True
+
     def __init__(self):
         self.calls = []
 
@@ -61,15 +63,14 @@ def test_list_gems_unknown_account_raises():
         asyncio.run(pool.list_gems("ghost"))
 
 
-def test_generate_pinned_account_passes_gem_id():
-    """验证锁定逻辑：account_id 固定时，acquire 收到的 exclude 应包含其他所有账号 id。"""
+def test_generate_prefers_account_and_passes_gem_id():
+    """account_id 作为优先账号传给账号池，同时保留 gem_id。"""
     pool, a0, a1 = _pool_with_accounts()
 
-    # 记录 acquire 被调用时的 exclude 参数
-    received_excludes = []
+    received = []
 
-    async def _fake_acquire(exclude=None):
-        received_excludes.append(exclude)
+    async def _fake_acquire(exclude=None, preferred_id=None):
+        received.append((exclude, preferred_id))
         return a1
 
     async def _fake_release(account, success, cooldown=False):
@@ -80,13 +81,11 @@ def test_generate_pinned_account_passes_gem_id():
 
     asyncio.run(pool.generate("hi", "gemini-pro", gem_id="g9", account_id="account-1"))
 
-    # 1. 只命中绑定账号 account-1，且带上 gem_id
+    # 优先账号空闲时仍命中 account-1，且带上 gem_id
     assert a1.client.calls == [("generate", "hi", "gemini-pro", "g9")]
     assert a0.client.calls == []
 
-    # 2. 验证锁定逻辑：acquire 收到的 exclude 应包含除 account-1 之外的所有账号（即 account-0）
-    assert len(received_excludes) == 1
-    assert received_excludes[0] == {"account-0"}
+    assert received == [(None, "account-1")]
 
 
 def test_generate_unknown_account_raises():
@@ -108,14 +107,14 @@ def test_generate_unknown_account_raises():
     assert acquire_called == []
 
 
-def test_generate_stream_pinned_account_passes_gem_id():
-    """流式版本：验证 gem_id 透传 + exclude 预填锁定逻辑。"""
+def test_generate_stream_prefers_account_and_passes_gem_id():
+    """流式版本同样传递优先账号和 gem_id。"""
     pool, a0, a1 = _pool_with_accounts()
 
-    received_excludes = []
+    received = []
 
-    async def _fake_acquire(exclude=None):
-        received_excludes.append(exclude)
+    async def _fake_acquire(exclude=None, preferred_id=None):
+        received.append((exclude, preferred_id))
         return a1
 
     async def _fake_release(account, success, cooldown=False):
@@ -139,9 +138,23 @@ def test_generate_stream_pinned_account_passes_gem_id():
     # 2. 收到了流式事件
     assert any(e.get("type") == "delta" for e in events)
 
-    # 3. 锁定逻辑：exclude 包含除 account-1 外的所有账号
-    assert len(received_excludes) == 1
-    assert received_excludes[0] == {"account-0"}
+    assert received == [(None, "account-1")]
+
+
+def test_busy_preferred_account_falls_back_to_idle_account():
+    pool = AccountPool()
+    preferred = Account("account-1", "psid-1", "", client=_FakeClient())
+    fallback = Account("account-0", "psid-0", "", client=_FakeClient())
+    pool._accounts = [preferred, fallback]
+    pool._max_concurrent = 1
+    preferred.active_requests = 1
+
+    async def choose():
+        assert pool._find_available(preferred_id="account-1") is fallback
+        preferred.active_requests = 0
+        assert pool._find_available(preferred_id="account-1") is preferred
+
+    asyncio.run(choose())
 
 
 def test_update_gem_routes_to_account():
