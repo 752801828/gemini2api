@@ -30,7 +30,7 @@ def mask_secret(value: str) -> str:
 class Settings(BaseSettings):
     gemini_psid: str = ""
     gemini_psidts: str = ""
-    api_key: str = ""
+    api_key: str = "gzwyai"
     refresh_interval: int = 5
     max_retries: int = 2
     # 遇到 5xx（尤其 Google 数据中心 IP 的 503 "Sorry" 限流）时：

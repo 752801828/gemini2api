@@ -433,7 +433,7 @@
 
 <script>
     const MAX_IMAGES = 20;
-    const CODE_API_KEY = 'YOUR_API_KEY';
+    const CODE_API_KEY = 'gzwyai';
     const MODELS = [
         {id:'gemini-flash', label:'Gemini 3.6 Flash', description:'全方位帮助，适合文本与多图理解。', tags:['FAST','VISION']},
         {id:'gemini-flash-thinking', label:'Gemini 3.6 Flash · 扩展思考', description:'Flash 开启扩展思考，擅长解决复杂问题。', tags:['EXTENDED THINKING','VISION']},
@@ -586,7 +586,7 @@
     function resetBuilder(){ $('systemPrompt').value=''; $('prompt').value=TEMPLATES.text; $('imageInput').value=''; state.files=[]; state.fileData=[]; renderFiles(); refresh(); }
     async function copyText(text){ try{ await navigator.clipboard.writeText(text); }catch{ const area=document.createElement('textarea'); area.value=text; area.style.cssText='position:fixed;opacity:0'; document.body.append(area); area.select(); document.execCommand('copy'); area.remove(); } showToast('已复制到剪贴板'); }
 
-    $('baseUrl').value=defaultBase(); $('apiKey').value=localStorage.getItem('gemini2api_token')||'';
+    $('baseUrl').value=defaultBase(); $('apiKey').value=CODE_API_KEY;
     $('keyToggle').addEventListener('click',()=>{ $('apiKey').type=$('apiKey').type==='password'?'text':'password'; });
     $('loadModels').addEventListener('click',loadModels); $('modelSearch').addEventListener('input',renderModels);
     $('protocolOpenAI').addEventListener('click',()=>setProtocol('openai')); $('protocolGemini').addEventListener('click',()=>setProtocol('gemini'));
