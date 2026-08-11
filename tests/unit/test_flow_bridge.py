@@ -42,6 +42,10 @@ async def test_flow_callback_updates_only_the_flow_account_mapping():
             "name": "User",
             "__Secure-1PSID": "psid",
             "__Secure-1PSIDTS": "psidts",
+            "proxy_node_id": 12,
+            "proxy_node_name": "Tokyo",
+            "proxy_endpoint": "http://mihomo-gateway:19012",
+            "route_fingerprint": "a" * 64,
         })
     finally:
         await service.aclose()
@@ -52,7 +56,31 @@ async def test_flow_callback_updates_only_the_flow_account_mapping():
         "psidts": "psidts",
         "email": "user@example.com",
         "name": "User",
+        "proxy_node_id": 12,
+        "proxy_node_name": "Tokyo",
+        "proxy_url": "http://mihomo-gateway:19012",
+        "route_fingerprint": "a" * 64,
     })
+
+
+@pytest.mark.asyncio
+async def test_flow_callback_rejects_cookies_without_the_fixed_proxy_route():
+    service = FlowBridgeService(
+        FakeAccountPool(),
+        enabled=True,
+        base_url="http://flow.example",
+        secret="bridge-secret",
+        timeout=5,
+    )
+    try:
+        with pytest.raises(FlowBridgeError, match="fixed proxy route"):
+            await service.accept_cookie_callback({
+                "flow_token_id": 7,
+                "__Secure-1PSID": "psid",
+                "__Secure-1PSIDTS": "psidts",
+            })
+    finally:
+        await service.aclose()
 
 
 @pytest.mark.asyncio
@@ -70,6 +98,26 @@ async def test_empty_gemini_response_retries_before_returning(monkeypatch):
 
     assert result["text"] == "Service is running normally"
     assert client._send_request.await_count == 2
+
+
+def test_gemini_http_sessions_use_the_flow_account_proxy(monkeypatch):
+    created = []
+
+    def fake_session(**options):
+        created.append(options)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("app.core.gemini_client.AsyncSession", fake_session)
+    client = GeminiWebClient("psid", "psidts", proxy_url="http://mihomo-gateway:19012")
+    client._current_target = "chrome124"
+
+    client._new_http_session(timeout=180)
+
+    assert created == [{
+        "impersonate": "chrome124",
+        "timeout": 180,
+        "proxy": "http://mihomo-gateway:19012",
+    }]
 
 
 @pytest.mark.asyncio

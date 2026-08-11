@@ -229,6 +229,72 @@ def test_manual_cookie_update_timestamp_is_persisted(tmp_path, monkeypatch):
     assert stored["psidts"] == "new-psidts"
 
 
+def test_flow_cookie_update_switches_proxy_before_validation_and_persists_route(tmp_path, monkeypatch):
+    events = []
+
+    class FlowClient:
+        is_healthy = True
+        cookie_credentials = ("old-psid", "old-psidts")
+
+        async def set_proxy_url(self, proxy_url):
+            events.append(("proxy", proxy_url))
+
+        async def reload_cookies(self, psid, psidts):
+            events.append(("cookies", psid, psidts))
+            self.cookie_credentials = (psid, psidts)
+            return {"success": True}
+
+    accounts_file = tmp_path / "accounts.json"
+    monkeypatch.setattr("app.core.account_pool.settings.accounts_file", str(accounts_file))
+    pool = AccountPool()
+    account = Account(
+        "flow-7",
+        "old-psid",
+        "old-psidts",
+        source="flow",
+        flow_token_id=7,
+        client=FlowClient(),
+    )
+    pool._accounts = [account]
+
+    asyncio.run(pool.upsert_flow_account(
+        7,
+        psid="new-psid",
+        psidts="new-psidts",
+        email="flow@example.com",
+        proxy_node_id=12,
+        proxy_node_name="Tokyo",
+        proxy_url="http://mihomo-gateway:19012",
+        route_fingerprint="a" * 64,
+    ))
+
+    stored = json.loads(accounts_file.read_text(encoding="utf-8"))["accounts"][0]
+    assert events == [
+        ("proxy", "http://mihomo-gateway:19012"),
+        ("cookies", "new-psid", "new-psidts"),
+    ]
+    assert stored["flow_proxy_node_id"] == 12
+    assert stored["flow_proxy_url"] == "http://mihomo-gateway:19012"
+    assert stored["flow_route_fingerprint"] == "a" * 64
+
+
+def test_flow_account_never_initializes_directly_before_proxy_sync():
+    pool = AccountPool()
+    account = Account(
+        "flow-7",
+        "psid",
+        "psidts",
+        source="flow",
+        flow_token_id=7,
+    )
+
+    asyncio.run(pool._init_account_client(account))
+
+    assert account.client is None
+    assert account.status == AccountStatus.EXPIRED
+    assert "proxy route" in account.last_error
+
+
 def test_browser_profile_failure_notifies_maintenance():
     class CookieClient:
         is_healthy = True

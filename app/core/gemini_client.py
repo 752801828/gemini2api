@@ -375,7 +375,8 @@ def _rand_reqid() -> int:
 
 class GeminiWebClient:
     def __init__(self, psid: str | None = None, psidts: str | None = None,
-                 browser_refresh: Callable[[], Awaitable[bool]] | None = None):
+                 browser_refresh: Callable[[], Awaitable[bool]] | None = None,
+                 proxy_url: str | None = None):
         self._psid = psid or settings.gemini_psid
         self._psidts = psidts or settings.gemini_psidts
         self._session_token: str = ""
@@ -401,6 +402,26 @@ class GeminiWebClient:
         self._last_reload_error: str = ""
         self._browser_refresh = browser_refresh
         self._browser_refresh_lock = asyncio.Lock()
+        self._proxy_url = str(proxy_url or "").strip()
+
+    def _new_http_session(self, *, target: str | None = None, timeout: int = 60) -> AsyncSession:
+        options = {
+            "impersonate": target or self._current_target,
+            "timeout": timeout,
+        }
+        if self._proxy_url:
+            options["proxy"] = self._proxy_url
+        return AsyncSession(**options)
+
+    async def set_proxy_url(self, proxy_url: str | None) -> None:
+        value = str(proxy_url or "").strip()
+        if value == self._proxy_url:
+            return
+        old = self._http
+        self._proxy_url = value
+        self._http = self._new_http_session() if self._current_target else None
+        if old is not None:
+            await old.close()
 
     async def initialize(self):
         fingerprint_config.load()
@@ -423,10 +444,7 @@ class GeminiWebClient:
                 self._cookie_jar.set("__Secure-1PSIDTS", self._psidts)
 
         self._current_target = header_builder.get_impersonate_target()
-        self._http = AsyncSession(
-            impersonate=self._current_target,
-            timeout=60,
-        )
+        self._http = self._new_http_session()
 
         await self._obtain_session_token()
 
@@ -477,7 +495,7 @@ class GeminiWebClient:
                 return
             logger.info(f"TLS 指纹更新: {self._current_target} -> {target}")
             old = self._http
-            self._http = AsyncSession(impersonate=target, timeout=60)
+            self._http = self._new_http_session(target=target)
             self._current_target = target
             if old is not None:
                 try:
@@ -1198,7 +1216,7 @@ class GeminiWebClient:
         last_images: list = []
         chunk_timeout = 120      # 单个 chunk 最长等待（兜底 #215 timeout 失效）
 
-        session = AsyncSession(impersonate=self._current_target, timeout=180)
+        session = self._new_http_session(timeout=180)
         try:
             async with session.stream(
                 "POST", GENERATE_URL,
@@ -1545,7 +1563,7 @@ class GeminiWebClient:
         # Recreate HTTP session to avoid accumulated cookie conflicts
         if self._http:
             await self._http.close()
-        self._http = AsyncSession(impersonate=self._current_target, timeout=60)
+        self._http = self._new_http_session()
 
         self._cookie_jar.set("__Secure-1PSID", self._psid)
         if self._psidts:

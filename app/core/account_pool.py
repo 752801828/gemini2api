@@ -72,6 +72,10 @@ class Account:
     source: str = "manual"
     flow_token_id: int | None = None
     flow_email: str = ""
+    flow_proxy_node_id: int | None = None
+    flow_proxy_node_name: str = ""
+    flow_proxy_url: str = ""
+    flow_route_fingerprint: str = ""
 
 
 class AccountPool:
@@ -146,6 +150,10 @@ class AccountPool:
                     source=item.get("source", "manual"),
                     flow_token_id=item.get("flow_token_id"),
                     flow_email=item.get("flow_email", ""),
+                    flow_proxy_node_id=item.get("flow_proxy_node_id"),
+                    flow_proxy_node_name=item.get("flow_proxy_node_name", ""),
+                    flow_proxy_url=item.get("flow_proxy_url", ""),
+                    flow_route_fingerprint=item.get("flow_route_fingerprint", ""),
                     cookie_updated_at=item.get("cookie_updated_at"),
                 )
             except Exception as e:
@@ -190,10 +198,22 @@ class AccountPool:
         async def refresh_profile() -> bool:
             return bool((await self._refresh_account_credentials(account)).get("success"))
 
+        if account.source == "flow" and not account.flow_proxy_url:
+            account.client = None
+            account.status = AccountStatus.EXPIRED
+            account.last_error = "Flow fixed proxy route has not been synchronized"
+            logger.warning("Account %s is waiting for its Flow fixed proxy route", account.id)
+            if account in self._accounts and self._flow_cookie_refresher:
+                task = asyncio.create_task(self._refresh_failed_account(account))
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
+            return
+
         client = GeminiWebClient(
             psid=account.psid,
             psidts=account.psidts,
             browser_refresh=refresh_profile,
+            proxy_url=account.flow_proxy_url,
         )
         account.client = client
         await client.initialize()
@@ -203,7 +223,7 @@ class AccountPool:
         else:
             account.status = AccountStatus.EXPIRED
             logger.warning(f"Account {account.id} ({account.label}) failed to initialize")
-            if settings.browser_refresh_enabled and account in self._accounts:
+            if account in self._accounts and (account.source == "flow" or settings.browser_refresh_enabled):
                 task = asyncio.create_task(
                     self._refresh_failed_account(account)
                     if account.source == "flow"
@@ -377,14 +397,33 @@ class AccountPool:
         psidts: str = "",
         email: str = "",
         name: str = "",
+        proxy_node_id: int | None = None,
+        proxy_node_name: str = "",
+        proxy_url: str = "",
+        route_fingerprint: str = "",
     ) -> Account:
         token_id = int(flow_token_id)
         account = self.get_flow_account(token_id)
         label = (name or email or f"Flow #{token_id}").strip()
+        fixed_proxy_url = str(proxy_url or "").strip()
         if account is not None:
             account.label = label
             account.flow_email = email.strip().lower()
-            await self._apply_account_cookies(account, psid, psidts)
+            account.flow_proxy_node_id = int(proxy_node_id) if proxy_node_id is not None else None
+            account.flow_proxy_node_name = str(proxy_node_name or "").strip()
+            account.flow_proxy_url = fixed_proxy_url
+            account.flow_route_fingerprint = str(route_fingerprint or "").strip()
+            if account.client is None:
+                account.psid = psid.strip()
+                account.psidts = psidts.strip()
+                await self._init_account_client(account)
+                if not account.client or not account.client.is_healthy:
+                    raise RuntimeError("Flow cookies are not a valid Gemini login session")
+                account.cookie_updated_at = datetime.now(timezone.utc).isoformat()
+                self._save_to_file()
+            else:
+                await account.client.set_proxy_url(fixed_proxy_url)
+                await self._apply_account_cookies(account, psid, psidts)
             return account
         account = Account(
             id=f"flow-{token_id}",
@@ -394,6 +433,10 @@ class AccountPool:
             source="flow",
             flow_token_id=token_id,
             flow_email=email.strip().lower(),
+            flow_proxy_node_id=int(proxy_node_id) if proxy_node_id is not None else None,
+            flow_proxy_node_name=str(proxy_node_name or "").strip(),
+            flow_proxy_url=fixed_proxy_url,
+            flow_route_fingerprint=str(route_fingerprint or "").strip(),
             cookie_updated_at=datetime.now(timezone.utc).isoformat(),
         )
         await self._init_account_client(account)
@@ -716,6 +759,10 @@ class AccountPool:
                 "source": a.source,
                 "flow_token_id": a.flow_token_id,
                 "flow_email": a.flow_email,
+                "flow_proxy_node_id": a.flow_proxy_node_id,
+                "flow_proxy_node_name": a.flow_proxy_node_name,
+                "flow_proxy_bound": bool(a.flow_proxy_url),
+                "flow_route_fingerprint": a.flow_route_fingerprint,
             }
             if include_credentials:
                 current_psid, current_psidts = a.client.cookie_credentials if a.client else (a.psid, a.psidts)
@@ -890,6 +937,10 @@ class AccountPool:
                 "source": a.source,
                 "flow_token_id": a.flow_token_id,
                 "flow_email": a.flow_email,
+                "flow_proxy_node_id": a.flow_proxy_node_id,
+                "flow_proxy_node_name": a.flow_proxy_node_name,
+                "flow_proxy_url": a.flow_proxy_url,
+                "flow_route_fingerprint": a.flow_route_fingerprint,
                 "cookie_updated_at": a.cookie_updated_at,
             })
         path = Path(settings.accounts_file)

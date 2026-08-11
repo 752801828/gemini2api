@@ -5,6 +5,7 @@ import random
 import secrets
 from types import SimpleNamespace
 from typing import Optional
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -126,6 +127,13 @@ class FlowBridgeService:
                     account = self.account_pool.get_flow_account(token_id)
                     if account is None:
                         raise FlowBridgeError("callback_missing", "Flow completed without sending Gemini cookies", 502)
+                    route_fingerprint = str(result.get("route_fingerprint") or "").strip()
+                    if not route_fingerprint or account.flow_route_fingerprint != route_fingerprint:
+                        raise FlowBridgeError(
+                            "route_mismatch",
+                            "Flow cookies were not bound to the reported fixed proxy route",
+                            409,
+                        )
                     return {"success": True, "account_id": account.id, "flow_token_id": token_id}
                 except Exception as error:
                     last_error = error
@@ -189,6 +197,23 @@ class FlowBridgeService:
         psidts = str(payload.get("__Secure-1PSIDTS") or "").strip()
         if not psid:
             raise FlowBridgeError("cookie_missing", "__Secure-1PSID is required", 422)
+        proxy_url = str(payload.get("proxy_endpoint") or "").strip()
+        route_fingerprint = str(payload.get("route_fingerprint") or "").strip()
+        try:
+            proxy_node_id = int(payload.get("proxy_node_id"))
+        except (TypeError, ValueError) as error:
+            raise FlowBridgeError("proxy_missing", "Flow fixed proxy route is required", 422) from error
+        parsed_proxy = urlsplit(proxy_url)
+        valid_fingerprint = len(route_fingerprint) == 64 and all(
+            character in "0123456789abcdefABCDEF" for character in route_fingerprint
+        )
+        if (
+            proxy_node_id <= 0
+            or parsed_proxy.scheme not in {"http", "https", "socks4", "socks5", "socks5h"}
+            or not parsed_proxy.hostname
+            or not valid_fingerprint
+        ):
+            raise FlowBridgeError("proxy_missing", "Flow fixed proxy route is required", 422)
         try:
             account = await self.account_pool.upsert_flow_account(
                 token_id,
@@ -196,6 +221,10 @@ class FlowBridgeService:
                 psidts=psidts,
                 email=str(payload.get("email") or ""),
                 name=str(payload.get("name") or ""),
+                proxy_node_id=proxy_node_id,
+                proxy_node_name=str(payload.get("proxy_node_name") or ""),
+                proxy_url=proxy_url,
+                route_fingerprint=route_fingerprint,
             )
         except Exception as error:
             raise FlowBridgeError("cookie_rejected", f"Gemini rejected Flow cookies: {error}", 409) from error
