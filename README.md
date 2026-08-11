@@ -51,6 +51,8 @@
 > [!IMPORTANT]
 > Cookie 寿命仍受 Google 风控策略影响。Docker Compose 部署已内置按账号隔离的 Chromium Profile，在登录态失效时自动尝试续期，无需安装外部浏览器插件；若 Google 已彻底注销该账号，仍需手动提供一组可登录的初始 Cookie。
 
+> 当前定制版本的完整架构、功能、Flow 联动、部署约束与修改日志见 [项目总览与修改日志](docs/PROJECT_OVERVIEW_AND_CHANGELOG.md)。
+
 ---
 
 ## 📝 最近更新
