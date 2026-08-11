@@ -484,6 +484,9 @@ async function loadAccounts() {
             const cookieUpdatedAt = account.cookie_updated_at
                 ? new Date(account.cookie_updated_at).toLocaleString('zh-CN', { hour12: false })
                 : '未记录';
+            const flowProxy = account.flow_proxy_bound
+                ? [account.flow_proxy_node_name, account.flow_proxy_node_id ? `#${account.flow_proxy_node_id}` : ''].filter(Boolean).join(' · ') || '已绑定'
+                : '未同步';
             return `
             <div class="account-card">
                 <div class="account-card-header">
@@ -500,6 +503,10 @@ async function loadAccounts() {
                 ${account.source === 'flow' ? `<div class="account-detail account-flow-email">
                     <span class="label">Flow 邮箱</span>
                     <span class="value">${escapeHtml(account.flow_email || '未提供')}</span>
+                </div>
+                <div class="account-detail account-flow-proxy">
+                    <span class="label">同步代理</span>
+                    <span class="value">${escapeHtml(flowProxy)}</span>
                 </div>` : ''}
                 <div class="account-detail">
                     <span class="label">${t('accounts.requests')}</span>

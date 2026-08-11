@@ -18,9 +18,12 @@ def test_dashboard_has_no_remote_qr_promotion():
     assert "qr-config.json" not in app
 
 
-def test_flow_accounts_show_their_email_in_account_management():
+def test_flow_accounts_show_their_email_and_proxy_in_account_management():
     root = Path(__file__).resolve().parents[2]
     app = (root / "static" / "app" / "app.js").read_text(encoding="utf-8")
 
     assert "Flow 邮箱" in app
     assert "account.flow_email || '未提供'" in app
+    assert "同步代理" in app
+    assert "account.flow_proxy_node_name" in app
+    assert "account.flow_proxy_bound" in app
