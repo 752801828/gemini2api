@@ -254,6 +254,40 @@ def test_patrol_uses_bounded_concurrency_within_each_account(tmp_path):
     assert [task["sequence"] for task in service.history[0]["tasks"]] == [1, 2, 3, 4]
 
 
+def test_patrol_does_not_exceed_active_account_pool_capacity(tmp_path):
+    class CapacityPool(FakePool):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        def get_status(self):
+            return {
+                "active": 1,
+                "max_concurrent_per_account": 2,
+                "accounts": [
+                    {"id": "a1", "label": "Account 1"},
+                    {"id": "a2", "label": "Account 2"},
+                ],
+            }
+
+        async def generate(self, prompt, model, attachments=None, account_id=None):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return {"text": "ok"}
+
+    pool = CapacityPool()
+    service = PatrolService(pool, tmp_path)
+    service.update_config({"text_test_count": 4, "image_test_enabled": False})
+
+    asyncio.run(service._run_round("round-capacity", "manual"))
+
+    assert pool.peak == 2
+    assert len(service.history[0]["tasks"]) == 8
+
+
 def test_patrol_overview_ignores_malformed_legacy_tasks(tmp_path):
     service = PatrolService(FakePool(), tmp_path)
     service.history = [{

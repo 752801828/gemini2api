@@ -311,9 +311,29 @@ class PatrolService:
             "concurrency_per_account": max(1, int(pool_status.get("max_concurrent_per_account") or 1)),
             "tasks": [],
         }
+        active_accounts = [account for account in accounts if account.get("status") == "active"]
+        if active_accounts:
+            round_capacity = sum(
+                max(
+                    0,
+                    self.current["concurrency_per_account"] - int(account.get("active_requests") or 0),
+                )
+                for account in active_accounts
+            )
+        else:
+            round_capacity = (
+                max(1, int(pool_status.get("active") or len(accounts)))
+                * self.current["concurrency_per_account"]
+            )
+        round_semaphore = asyncio.Semaphore(max(1, round_capacity))
         try:
             await asyncio.gather(*(
-                self._test_account(account, test_specs, self.current["concurrency_per_account"])
+                self._test_account(
+                    account,
+                    test_specs,
+                    self.current["concurrency_per_account"],
+                    round_semaphore,
+                )
                 for account in accounts
             ))
             self.current["status"] = "success" if self.current["failed"] == 0 else "partial"
@@ -334,12 +354,19 @@ class PatrolService:
             self.history.append(copy.deepcopy(self.current))
             self._save_history()
 
-    async def _test_account(self, account: dict, test_specs: list[tuple[str, int]], concurrency: int) -> None:
+    async def _test_account(
+        self,
+        account: dict,
+        test_specs: list[tuple[str, int]],
+        concurrency: int,
+        round_semaphore: asyncio.Semaphore,
+    ) -> None:
         semaphore = asyncio.Semaphore(max(1, concurrency))
 
         async def guarded(test_type: str, sequence: int) -> dict:
             async with semaphore:
-                return await self._test_task(account, test_type, sequence)
+                async with round_semaphore:
+                    return await self._test_task(account, test_type, sequence)
 
         results = await asyncio.gather(*(guarded(test_type, sequence) for test_type, sequence in test_specs))
         self.current["tasks"].extend(results)
