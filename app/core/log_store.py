@@ -1,6 +1,7 @@
 """Structured log store with circular buffer, filtering, pagination, and persistence."""
 
 import json
+import re
 import uuid
 from collections import deque
 from dataclasses import dataclass, field, asdict
@@ -8,6 +9,110 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Optional
+
+
+_TOKEN_SCRUB_RE = re.compile(r"(token=)[^&\s]+", re.IGNORECASE)
+_SK_SCRUB_RE = re.compile(r"sk-[A-Za-z0-9]{4,}")
+_BEARER_SCRUB_RE = re.compile(r"(Bearer\s+)[^\s\"']+", re.IGNORECASE)
+_DATA_URL_RE = re.compile(
+    r"data:(image|audio|video)/[^;,\s]+;base64,[A-Za-z0-9+/=_-]+",
+    re.IGNORECASE,
+)
+_SENSITIVE_LOG_KEYS = {
+    "authorization", "api_key", "apikey", "x_api_key", "key", "access_token",
+    "refresh_token", "id_token", "token", "secret", "client_secret", "password",
+    "cookie", "cookies",
+}
+_MEDIA_LOG_KEYS = {"b64_json", "base64", "image_base64", "audio_base64", "video_base64"}
+LOG_BODY_CAPTURE_LIMIT = 64 * 1024
+_LOG_PAYLOAD_CHAR_LIMIT = 20_000
+_LOG_STRING_CHAR_LIMIT = 12_000
+
+
+def scrub_log_text(text: str) -> str:
+    if not text:
+        return text
+    scrubbed = _TOKEN_SCRUB_RE.sub(r"\1****", text)
+    scrubbed = _SK_SCRUB_RE.sub("sk-****", scrubbed)
+    return _BEARER_SCRUB_RE.sub(r"\1****", scrubbed)
+
+
+def sanitize_log_payload(value, depth: int = 0):
+    """Preserve useful JSON while removing secrets and large media blobs."""
+    if depth > 10:
+        return "[nested content omitted]"
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            name = str(key)
+            normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+            if normalized in _SENSITIVE_LOG_KEYS:
+                sanitized[name] = "****"
+            elif normalized in _MEDIA_LOG_KEYS and isinstance(item, str):
+                sanitized[name] = f"[base64 omitted: {len(item)} chars]"
+            else:
+                sanitized[name] = sanitize_log_payload(item, depth + 1)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_log_payload(item, depth + 1) for item in value]
+    if isinstance(value, str):
+        text = scrub_log_text(value)
+        text = _DATA_URL_RE.sub(
+            lambda match: f"[{match.group(1).lower()} base64 omitted: {len(match.group(0))} chars]",
+            text,
+        )
+        if len(text) > _LOG_STRING_CHAR_LIMIT:
+            return text[:_LOG_STRING_CHAR_LIMIT] + f"...[truncated {len(text) - _LOG_STRING_CHAR_LIMIT} chars]"
+        return text
+    return value
+
+
+def limit_log_payload(value):
+    sanitized = sanitize_log_payload(value)
+    serialized = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) <= _LOG_PAYLOAD_CHAR_LIMIT:
+        return sanitized
+    return {
+        "truncated": True,
+        "preview": serialized[:_LOG_PAYLOAD_CHAR_LIMIT],
+        "omitted_chars": len(serialized) - _LOG_PAYLOAD_CHAR_LIMIT,
+    }
+
+
+def decode_logged_response(captured: bytes, content_type: str, stream: bool | None, truncated: bool) -> dict:
+    text = captured.decode("utf-8", errors="replace")
+    if "application/json" in content_type and not truncated:
+        try:
+            return limit_log_payload(json.loads(text))
+        except json.JSONDecodeError:
+            pass
+    return {
+        "stream": bool(stream or "text/event-stream" in content_type),
+        "content_type": content_type or None,
+        "truncated": truncated,
+        "preview": sanitize_log_payload(text),
+    }
+
+
+async def capture_response_iterator(body_iterator, log_store, record_id: str, content_type: str, stream: bool | None):
+    captured = bytearray()
+    truncated = False
+    try:
+        async for chunk in body_iterator:
+            raw = chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+            remaining = LOG_BODY_CAPTURE_LIMIT - len(captured)
+            if remaining > 0:
+                captured.extend(raw[:remaining])
+            if len(raw) > remaining:
+                truncated = True
+            yield chunk
+    finally:
+        updater = getattr(log_store, "update_response", None)
+        if updater:
+            updater(
+                record_id,
+                decode_logged_response(bytes(captured), content_type, stream, truncated),
+            )
 
 
 @dataclass
@@ -98,6 +203,15 @@ class LogStore:
                 self._id_index.pop(evicted.id, None)
             self._buffer.append(record)
             self._id_index[record.id] = record
+        self._dirty = True
+
+    def update_response(self, record_id: str, response_body: dict) -> None:
+        """Attach a captured response to its existing request record."""
+        with self._lock:
+            record = self._id_index.get(record_id)
+            if record is None:
+                return
+            record.response = response_body
         self._dirty = True
 
     def query(

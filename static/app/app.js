@@ -8,7 +8,7 @@ import { initAuth, apiCall, logout } from './auth.js?v=2';
 import { showToast, formatNumber, getStatusBadge, maskString, copyToClipboard, showConfirm } from './utils.js';
 import { initUsageStats, loadUsageStats } from './usage-chart.js';
 import { initPatrol, loadPatrol } from './patrol.js?v=12';
-import { initLogs } from './logs.js';
+import { initLogs } from './logs.js?v=2';
 import { initSettings, loadSettings } from './settings.js';
 import { initApiKeys, loadApiKeys } from './api-keys.js';
 import { initGems, loadAccountsThenGems } from './gems.js';

@@ -223,7 +223,15 @@ function showDetail(record) {
     const panel = document.getElementById('logs-detail');
     const json = document.getElementById('log-detail-json');
     if (panel && json) {
-        json.textContent = JSON.stringify(record, null, 2);
+        const metadata = { ...record };
+        delete metadata.request;
+        delete metadata.response;
+        json.textContent = '基本信息\n'
+            + JSON.stringify(metadata, null, 2)
+            + '\n\n请求\n'
+            + JSON.stringify(record.request ?? null, null, 2)
+            + '\n\n返回\n'
+            + JSON.stringify(record.response ?? null, null, 2);
         panel.classList.add('visible');
     }
 }

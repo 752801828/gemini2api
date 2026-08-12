@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -18,7 +19,15 @@ from app.core.limiter import limiter
 from app.core.fingerprint.version_sync import version_sync_loop
 from app.core.usage_stats import UsageStatsStore
 from app.core.usage_timer import snapshot_loop
-from app.core.log_store import LogStore, create_log_record
+from app.core.log_store import (
+    LOG_BODY_CAPTURE_LIMIT,
+    LogStore,
+    capture_response_iterator,
+    create_log_record,
+    decode_logged_response,
+    limit_log_payload,
+    scrub_log_text,
+)
 from app.routers import openai, claude, gemini, research
 from app.routers import responses as responses_router
 from app.routers import admin
@@ -210,20 +219,6 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 SKIP_LOG_PREFIXES = ("/static/", "/favicon.ico", "/admin/logs")
 
-import re as _re
-
-# VULN-008：日志脱敏。避免 ?token=sk-xxx / 路径中出现的 key 进入结构化日志。
-_TOKEN_SCRUB_RE = _re.compile(r"(token=)[^&\s]+", _re.IGNORECASE)
-_SK_SCRUB_RE = _re.compile(r"sk-[A-Za-z0-9]{4,}")
-
-
-def _scrub_sensitive(text: str) -> str:
-    if not text:
-        return text
-    scrubbed = _TOKEN_SCRUB_RE.sub(r"\1****", text)
-    return _SK_SCRUB_RE.sub("sk-****", scrubbed)
-
-
 @app.middleware("http")
 async def log_capture_middleware(request: Request, call_next):
     path = request.url.path
@@ -262,13 +257,14 @@ async def log_capture_middleware(request: Request, call_next):
 
     model = None
     stream = None
+    request_body = None
     if hasattr(request.state, "_body_cache"):
-        import json
         try:
             body = json.loads(request.state._body_cache)
             if isinstance(body, dict):
                 model = body.get("model")
                 stream = body.get("stream")
+                request_body = limit_log_payload(body)
         except Exception:
             pass
 
@@ -279,15 +275,33 @@ async def log_capture_middleware(request: Request, call_next):
     log_store = request.app.state.log_store
     record = create_log_record(
         method=method,
-        path=_scrub_sensitive(path),
+        path=scrub_log_text(path),
         direction=direction,
         model=model,
         status=status,
         latency_ms=latency_ms,
         stream=stream,
         error=error_msg,
+        request_body=request_body,
     )
     log_store.add(record)
+
+    content_type = response.headers.get("content-type", "")
+    if is_api and hasattr(response, "body_iterator"):
+        response.body_iterator = capture_response_iterator(
+            response.body_iterator, log_store, record.id, content_type, stream
+        )
+    elif is_api:
+        raw_body = getattr(response, "body", b"") or b""
+        updater = getattr(log_store, "update_response", None)
+        if updater:
+            updater(
+                record.id,
+                decode_logged_response(
+                    raw_body[:LOG_BODY_CAPTURE_LIMIT], content_type, stream,
+                    len(raw_body) > LOG_BODY_CAPTURE_LIMIT,
+                ),
+            )
 
     return response
 
