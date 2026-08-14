@@ -31,8 +31,7 @@
 
 <br>
 
-<a href="https://github.com/xwteam/gemini2api/issues"><img src="https://img.shields.io/github/issues/xwteam/gemini2api?style=flat-square" alt="Open Issues"></a>
-<a href="https://github.com/xwteam/gemini2api/issues?q=is%3Aissue+is%3Aclosed"><img src="https://img.shields.io/github/issues-closed/xwteam/gemini2api?style=flat-square" alt="Closed Issues"></a>
+<a href="https://github.com/xwteam/gemini2api/issues"><img src="https://img.shields.io/github/issues/xwteam/gemini2api?style=flat-square" alt="Issues"></a>
 <a href="https://github.com/xwteam/gemini2api/stargazers"><img src="https://img.shields.io/github/stars/xwteam/gemini2api?style=flat-square" alt="Stars"></a>
 
 </div>
