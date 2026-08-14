@@ -82,9 +82,9 @@ async def create_response(request: Request):
     _reasoning = body.get("reasoning") or {}
     _eff = ""
     if isinstance(_reasoning, dict):
-        _eff = (_reasoning.get("effort") or "").strip()
+        _eff = str(_reasoning.get("effort") or "").strip()
     if not _eff:
-        _eff = (body.get("reasoning_effort") or "").strip()
+        _eff = str(body.get("reasoning_effort") or "").strip()
     extended_thinking = bool(_eff) and settings.extended_thinking_enabled
 
     if previous_response_id:
@@ -200,6 +200,7 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
                 yield enc.failed(str(e))
                 return
         text = result.get("text", "")
+        thoughts = result.get("thoughts") or ""
         gen_images = result.get("images") or []
         if gen_images:
             md = _images_to_markdown(gen_images, request)
@@ -218,7 +219,11 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
                 for frame in enc.text_message_end(msg_id, idx, full_text):
                     yield frame
         usage = {"input_tokens": estimate_tokens(prompt), "output_tokens": estimate_tokens(text)}
-        yield enc.completed(output, usage)
+        completed_output = output
+        if thoughts:
+            completed_output = [{"type": "reasoning", "id": new_response_id().replace("resp_", "rs_"),
+                                 "summary": [{"type": "summary_text", "text": thoughts}]}] + output
+        yield enc.completed(completed_output, usage)
         return
 
     # 真流式路径：无工具/附件，逐块转发
@@ -227,6 +232,7 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
         yield frame
     full_text = ""
     final_images = []
+    thoughts = ""
     streamed_any = False
     try:
         async for evt in gemini_client.generate_stream(prompt, model, "", attachments,
@@ -246,6 +252,7 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
                         yield enc.text_delta(msg_id, 0, tail)
                 full_text = final_text
                 final_images = evt.get("images") or []
+                thoughts = evt.get("thoughts") or ""
     except Exception as e:
         # 扩展思维链路径失败且尚未流出任何内容：退回非流式非思维链重试一次
         if extended_thinking and not streamed_any:
@@ -273,5 +280,8 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
         yield frame
     output = [{"id": msg_id, "type": "message", "role": "assistant", "status": "completed",
               "content": [{"type": "output_text", "text": full_text, "annotations": []}]}]
+    if thoughts:
+        output = [{"type": "reasoning", "id": new_response_id().replace("resp_", "rs_"),
+                  "summary": [{"type": "summary_text", "text": thoughts}]}] + output
     usage = {"input_tokens": estimate_tokens(prompt), "output_tokens": estimate_tokens(full_text)}
     yield enc.completed(output, usage)

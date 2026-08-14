@@ -58,7 +58,7 @@
 
 | 날짜 | 업데이트 내용 |
 |------|----------|
-| 2026-08-14 21:00:00 | v1.6.29 - 🧠 네이티브 Gemini 확장 사고: `reasoning_effort`를 전송하여 pro/flash/flash-lite에서 사고를 활성화하고, reasoning_content로 반환하세요; 기본 활성화, 원클릭 비활성화, 자동 대체로 일반 채팅에 영향 없음; 또한 flash-lite 무료 계층 모델 ID를 수정했습니다 |
+| 2026-08-14 21:00:00 | v1.6.29 - 🧠 네이티브 Gemini 확장 사고: `reasoning_effort`를 전송하여 pro/flash/flash-lite에서 사고를 활성화하고, reasoning_content로 반환합니다; 기본 활성화, 원클릭 비활성화, 자동 대체로 일반 채팅에 영향 없음; 또한 flash-lite 무료 계층 모델 ID를 수정했습니다 |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 gemini-flash-lite 모델 추가: Gemini의 가장 가벼운 Flash-Lite(3.5 Flash-Lite) 등급을 노출하여 Pro/Flash가 사용량 제한에 걸려도 사용 가능한 모델을 선택할 수 있습니다(고정 공개 이름 뒤에서 계정의 실제 모델로 동적 매핑) |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 관리 패널 브랜드 로고 및 파비콘: 좌측 상단 아이콘을 커스텀 브랜드 로고 이미지로 교체(128×128, 약 16KB로 압축, 원본 대비 약 97% 축소); 관리 패널과 로그인 페이지에 브라우저 탭 파비콘 추가(동일 로고 사용) |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 신규 OpenAI Responses API 지원(`/v1/responses` 또는 `/openai/v1/responses`): Chat Completions 대신 최신 Responses 프로토콜을 요구하는 클라이언트(예: 2026년 2월부로 Chat Completions 지원을 중단한 Codex CLI)가 gemini2api와 정상적으로 연동되도록 지원 — 텍스트 대화, 스트리밍, 함수/도구 호출을 Gemini 모델과 API 관리에서 구성한 타사 모델 모두에서 사용 가능; 스트리밍 이벤트는 공식 프로토콜 순서를 엄격히 준수(참조 구현에서 흔히 누락되는 두 개의 종료 이벤트 `response.output_text.done` / `response.function_call_arguments.done`을 수정); 서버 측 멀티턴 상태는 저장하지 않음 — `previous_response_id`는 조용히 이어지는 척하는 대신 명확한 오류를 반환하며, Codex CLI 같은 클라이언트는 전체 대화 히스토리를 직접 재전송함 |

@@ -1,3 +1,5 @@
+import json
+
 _AUTH = {"Authorization": "Bearer sk-test-key"}
 
 
@@ -82,3 +84,51 @@ def test_responses_thinking_failure_falls_back_to_normal(gem_client, monkeypatch
     types = [it.get("type") for it in body["output"]]
     assert "reasoning" not in types
     assert any(it.get("type") == "message" for it in body["output"])
+
+
+def test_responses_stream_emits_reasoning_item_in_completed_output(gem_client, monkeypatch):
+    """真流式路径：final 事件带 thoughts 时，response.completed 的 output 里要含 reasoning item。"""
+    import app.routers.responses as rp
+
+    async def fake_generate_stream(prompt, model, conversation_id="", attachments=None,
+                                   gem_id=None, account_id=None, extended_thinking=False):
+        assert extended_thinking is True
+        yield {"type": "delta", "text": "Hel"}
+        yield {"type": "delta", "text": "lo"}
+        yield {"type": "final", "text": "Hello", "conversation_id": "", "images": [],
+              "thoughts": "stream thoughts"}
+
+    monkeypatch.setattr(rp.gemini_client, "generate_stream", fake_generate_stream)
+    with gem_client.stream("POST", "/v1/responses", json={
+        "model": "gemini-pro", "input": "hi", "stream": True, "reasoning": {"effort": "high"},
+    }, headers=_AUTH) as r:
+        events = []
+        for line in r.iter_lines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: "):]))
+    completed = [e for e in events if e.get("type") == "response.completed"]
+    assert completed, "no response.completed event found"
+    output = completed[0]["response"]["output"]
+    types = [it.get("type") for it in output]
+    assert "reasoning" in types
+    reasoning_item = next(it for it in output if it["type"] == "reasoning")
+    assert reasoning_item["summary"][0]["text"] == "stream thoughts"
+    assert any(it.get("type") == "message" for it in output)
+
+
+def test_responses_non_string_effort_enables_thinking_without_500(gem_client, monkeypatch):
+    """reasoning.effort 是非字符串（如 int）时不能 500，且非空真值仍应启用思维链。"""
+    import app.routers.responses as rp
+    captured = {}
+
+    async def fake_generate(prompt, model, conversation_id="", attachments=None, gem_id=None,
+                            account_id=None, extended_thinking=False):
+        captured["ext"] = extended_thinking
+        return {"text": "answer", "images": [], "conversation_id": "c", "thoughts": ""}
+
+    monkeypatch.setattr(rp.gemini_client, "generate", fake_generate)
+    r = gem_client.post("/v1/responses", json={
+        "model": "gemini-flash", "input": "hi", "reasoning": {"effort": 5},
+    }, headers=_AUTH)
+    assert r.status_code == 200
+    assert captured["ext"] is True
