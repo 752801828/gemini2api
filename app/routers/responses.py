@@ -13,6 +13,7 @@ from app.core.gemini_client import GEMINI_MODELS, _resolve_model
 from app.core.responses_protocol import (
     parse_responses_input, build_responses_object, new_response_id, ResponsesStreamEncoder,
 )
+from app.core.stream import iter_with_keepalive, SSE_KEEPALIVE_FRAME
 from app.routers.openai import _images_to_markdown
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens
 from app.utils.prompt import build_prompt_from_messages, extract_attachments
@@ -235,9 +236,13 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
     thoughts = ""
     streamed_any = False
     try:
-        async for evt in gemini_client.generate_stream(prompt, model, "", attachments,
-                                                        gem_id=gem_id, account_id=gem_account_id,
-                                                        extended_thinking=extended_thinking):
+        async for _kind, evt in iter_with_keepalive(
+            gemini_client.generate_stream(prompt, model, "", attachments,
+                                          gem_id=gem_id, account_id=gem_account_id,
+                                          extended_thinking=extended_thinking)):
+            if _kind == "ping":
+                yield SSE_KEEPALIVE_FRAME
+                continue
             if evt.get("type") == "delta":
                 delta = evt.get("text", "")
                 if delta:

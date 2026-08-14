@@ -49,3 +49,23 @@ def test_openai_still_has_buffered_keepalive():
     """回归：buffered 路径心跳（既有）不受影响。"""
     src = (_ROOT / "app" / "routers" / "openai.py").read_text(encoding="utf-8")
     assert "_sse_keepalive_during(gen_task)" in src
+
+
+def test_responses_stream_emits_keepalive_ping_during_silence(gem_client, monkeypatch):
+    """/v1/responses 流式：等上游的静默期必须发 : ping；答案照常。"""
+    import app.routers.responses as rp
+    monkeypatch.setattr(stream_mod, "SSE_KEEPALIVE_INTERVAL", 0.05)
+
+    async def slow_generate_stream(prompt, model, conversation_id="", attachments=None,
+                                   gem_id=None, account_id=None, extended_thinking=False):
+        await asyncio.sleep(0.25)
+        yield {"type": "delta", "text": "85"}
+        yield {"type": "final", "text": "85", "conversation_id": "", "images": [], "thoughts": ""}
+
+    monkeypatch.setattr(rp.gemini_client, "generate_stream", slow_generate_stream)
+    with gem_client.stream("POST", "/v1/responses", json={
+        "model": "gemini-pro", "input": "1+3+9*9", "stream": True,
+    }, headers=_AUTH) as r:
+        body = "".join(r.iter_text())
+    assert ": ping" in body
+    assert "85" in body
