@@ -17,7 +17,12 @@ def test_flash_lite_in_public_models():
 
 
 def test_flash_lite_family_entries_exist_with_correct_id():
-    for name in ("gemini-3-flash-lite", "gemini-3-flash-lite-plus", "gemini-3-flash-lite-advanced"):
+    # Base (free tier) uses free-tier id; plus/advanced (paid tiers) use paid id
+    assert "gemini-3-flash-lite" in GEMINI_MODELS
+    assert GEMINI_MODELS["gemini-3-flash-lite"]["id"] == "cf41b0e0dd7d53e5"
+    assert GEMINI_MODELS["gemini-3-flash-lite"]["family"] == "flash-lite"
+
+    for name in ("gemini-3-flash-lite-plus", "gemini-3-flash-lite-advanced"):
         assert name in GEMINI_MODELS, name
         assert GEMINI_MODELS[name]["id"] == FLASH_LITE_ID
         assert GEMINI_MODELS[name]["family"] == "flash-lite"

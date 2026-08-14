@@ -47,18 +47,18 @@ BATCHEXECUTE_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute"
 MODEL_HEADER_KEY = "x-goog-ext-525001261-jspb"
 
 GEMINI_MODELS = {
-    "gemini-3-pro": {"id": "9d8ca3786ebdfbea", "capacity": 1, "pro_only": False, "family": "pro"},
-    "gemini-3-flash": {"id": "fbb127bbb056c959", "capacity": 1, "pro_only": False, "family": "flash"},
-    "gemini-3-flash-thinking": {"id": "5bf011840784117a", "capacity": 1, "pro_only": False, "family": "flash-thinking"},
-    "gemini-3-flash-lite": {"id": "8c46e95b1a07cecc", "capacity": 1, "pro_only": False, "family": "flash-lite"},
-    "gemini-3-pro-plus": {"id": "e6fa609c3fa255c0", "capacity": 4, "pro_only": True, "family": "pro"},
-    "gemini-3-flash-plus": {"id": "56fdd199312815e2", "capacity": 4, "pro_only": True, "family": "flash"},
-    "gemini-3-flash-thinking-plus": {"id": "e051ce1aa80aa576", "capacity": 4, "pro_only": True, "family": "flash-thinking"},
-    "gemini-3-flash-lite-plus": {"id": "8c46e95b1a07cecc", "capacity": 4, "pro_only": True, "family": "flash-lite"},
-    "gemini-3-pro-advanced": {"id": "e6fa609c3fa255c0", "capacity": 2, "pro_only": True, "family": "pro"},
-    "gemini-3-flash-advanced": {"id": "56fdd199312815e2", "capacity": 2, "pro_only": True, "family": "flash"},
-    "gemini-3-flash-thinking-advanced": {"id": "e051ce1aa80aa576", "capacity": 2, "pro_only": True, "family": "flash-thinking"},
-    "gemini-3-flash-lite-advanced": {"id": "8c46e95b1a07cecc", "capacity": 2, "pro_only": True, "family": "flash-lite"},
+    "gemini-3-pro": {"id": "9d8ca3786ebdfbea", "capacity": 1, "pro_only": False, "family": "pro", "model_number": 3},
+    "gemini-3-flash": {"id": "fbb127bbb056c959", "capacity": 1, "pro_only": False, "family": "flash", "model_number": 1},
+    "gemini-3-flash-thinking": {"id": "5bf011840784117a", "capacity": 1, "pro_only": False, "family": "flash-thinking", "model_number": 1},
+    "gemini-3-flash-lite": {"id": "cf41b0e0dd7d53e5", "capacity": 1, "pro_only": False, "family": "flash-lite", "model_number": 6},
+    "gemini-3-pro-plus": {"id": "e6fa609c3fa255c0", "capacity": 4, "pro_only": True, "family": "pro", "model_number": 3},
+    "gemini-3-flash-plus": {"id": "56fdd199312815e2", "capacity": 4, "pro_only": True, "family": "flash", "model_number": 1},
+    "gemini-3-flash-thinking-plus": {"id": "e051ce1aa80aa576", "capacity": 4, "pro_only": True, "family": "flash-thinking", "model_number": 1},
+    "gemini-3-flash-lite-plus": {"id": "8c46e95b1a07cecc", "capacity": 4, "pro_only": True, "family": "flash-lite", "model_number": 6},
+    "gemini-3-pro-advanced": {"id": "e6fa609c3fa255c0", "capacity": 2, "pro_only": True, "family": "pro", "model_number": 3},
+    "gemini-3-flash-advanced": {"id": "56fdd199312815e2", "capacity": 2, "pro_only": True, "family": "flash", "model_number": 1},
+    "gemini-3-flash-thinking-advanced": {"id": "e051ce1aa80aa576", "capacity": 2, "pro_only": True, "family": "flash-thinking", "model_number": 1},
+    "gemini-3-flash-lite-advanced": {"id": "8c46e95b1a07cecc", "capacity": 2, "pro_only": True, "family": "flash-lite", "model_number": 6},
 }
 
 # 对外暴露的稳定模型名（永不变，API 契约）。客户端只认这 4 个，
@@ -100,6 +100,12 @@ def _build_id_alias_map() -> dict[str, str]:
     """内部 model_id -> 内部模型名（用于状态接口解析）。"""
     return {info["id"]: name for name, info in GEMINI_MODELS.items()}
 
+
+def _model_number(model_name: str) -> int:
+    """Resolved model's PR#310 model-type code (pro=3/flash=1/flash-lite=6); default 1."""
+    resolved = _resolve_model(model_name)
+    info = GEMINI_MODELS.get(resolved)
+    return int(info["model_number"]) if info and "model_number" in info else 1
 
 
 def _resolve_model(model_name: str, family_model: dict[str, str] | None = None) -> str:
