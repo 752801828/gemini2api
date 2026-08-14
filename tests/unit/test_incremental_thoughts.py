@@ -8,7 +8,6 @@ def test_generate_stream_emits_incremental_thoughts_event():
     assert '{"type": "thoughts"' in src
     # 用独立累积游标做前缀 diff
     assert "emitted_thoughts" in src
-    # 思考增量在答案 delta 之前 yield（thoughts 事件的 yield 位置早于 delta 事件的 yield）
-    i_thoughts = src.index('{"type": "thoughts"')
-    i_delta = src.index('{"type": "delta"')
-    assert i_thoughts < i_delta, "思考增量必须在答案 delta 之前 yield"
+    # 思考增量在答案 delta 之前 yield（guard 运行时 yield 语句本身，而非 docstring 提及顺序）
+    assert src.index('yield {"type": "thoughts"') < src.index('yield {"type": "delta"'), \
+        "思考增量必须在答案 delta 之前 yield"

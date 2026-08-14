@@ -1274,8 +1274,8 @@ class GeminiWebClient:
 
     async def _finalize_stream(self, text: str, conv_id: str, images: list, thoughts: str = "") -> dict:
         """流式收尾：下载/存生成图、过滤占位 URL，组装与 _send_request 一致的 final 结果。
-        thoughts 目前只是把完整累积思维链原样带上（与 conversation_id 一样一次性给出）；
-        真正的思维链增量流式 emit 留给后续任务实现。
+        thoughts 增量已由 generate_stream 循环内逐帧 yield（`{"type": "thoughts"}` 事件）；
+        这里的 thoughts 是完整累积思维链，作为收尾兜底一次性带上（防漏发/防中途断连丢失）。
         """
         result_images: list = []
         if images:
