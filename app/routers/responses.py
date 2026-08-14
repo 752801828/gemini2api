@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
 from app.core.gemini_client import GEMINI_MODELS, _resolve_model
 from app.core.responses_protocol import (
@@ -78,6 +79,14 @@ async def create_response(request: Request):
     tool_choice = _normalize_tool_choice_for_prompt(body.get("tool_choice"))
     previous_response_id = body.get("previous_response_id")
 
+    _reasoning = body.get("reasoning") or {}
+    _eff = ""
+    if isinstance(_reasoning, dict):
+        _eff = (_reasoning.get("effort") or "").strip()
+    if not _eff:
+        _eff = (body.get("reasoning_effort") or "").strip()
+    extended_thinking = bool(_eff) and settings.extended_thinking_enabled
+
     if previous_response_id:
         return _error(400, "previous_response_id is not supported by this server "
                           "(no server-side conversation state); resend full history in 'input'.",
@@ -123,16 +132,27 @@ async def create_response(request: Request):
     if stream:
         return StreamingResponse(
             _stream_gemini_response(request, prompt, resolved_model, has_tools, attachments,
-                                    gem_id, gem_account_id, request_params),
+                                    gem_id, gem_account_id, request_params, extended_thinking),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     try:
         result = await gemini_client.generate(prompt, resolved_model, "", attachments,
-                                              gem_id=gem_id, account_id=gem_account_id)
+                                              gem_id=gem_id, account_id=gem_account_id,
+                                              extended_thinking=extended_thinking)
     except Exception as e:
-        return _error(502, str(e), error_type="api_error")
+        # 扩展思维链路径失败：先原样退回非思维链重试一次（同 chat/completions 的兜底策略）
+        if extended_thinking:
+            logger.warning(f"extended-thinking request failed, retrying normal: {e}")
+            try:
+                result = await gemini_client.generate(prompt, resolved_model, "", attachments,
+                                                      gem_id=gem_id, account_id=gem_account_id,
+                                                      extended_thinking=False)
+            except Exception as e2:
+                return _error(502, str(e2), error_type="api_error")
+        else:
+            return _error(502, str(e), error_type="api_error")
 
     text = result.get("text", "")
     # AI 生成图片：沿用 chat/completions 的既有做法，Markdown 图片链接嵌入文字内容（design §4.3）
@@ -141,6 +161,10 @@ async def create_response(request: Request):
         md = _images_to_markdown(gen_images, request)
         text = (md + "\n" + text.strip()) if text.strip() else md
     output, _ = _build_output_items(text, has_tools)
+    thoughts = result.get("thoughts") or ""
+    if thoughts:
+        output = [{"type": "reasoning", "id": new_response_id().replace("resp_", "rs_"),
+                  "summary": [{"type": "summary_text", "text": thoughts}]}] + output
     usage = {"input_tokens": estimate_tokens(prompt), "output_tokens": estimate_tokens(text)}
     obj = build_responses_object(model=resolved_model, status="completed", output=output,
                                  request_params=request_params, usage=usage,
@@ -149,7 +173,7 @@ async def create_response(request: Request):
 
 
 async def _stream_gemini_response(request, prompt, model, has_tools, attachments, gem_id,
-                                  gem_account_id, request_params):
+                                  gem_account_id, request_params, extended_thinking=False):
     response_id = new_response_id()
     enc = ResponsesStreamEncoder(response_id, model, request_params)
     yield enc.created()
@@ -159,10 +183,22 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
         # 工具调用/附件：需要完整文本才能判断，走非流式收集（同 openai.py 的 buffered 门禁）
         try:
             result = await gemini_client.generate(prompt, model, "", attachments,
-                                                  gem_id=gem_id, account_id=gem_account_id)
+                                                  gem_id=gem_id, account_id=gem_account_id,
+                                                  extended_thinking=extended_thinking)
         except Exception as e:
-            yield enc.failed(str(e))
-            return
+            # 扩展思维链路径失败：先原样退回非思维链重试一次
+            if extended_thinking:
+                logger.warning(f"extended-thinking stream(buffered) failed, retrying normal: {e}")
+                try:
+                    result = await gemini_client.generate(prompt, model, "", attachments,
+                                                          gem_id=gem_id, account_id=gem_account_id,
+                                                          extended_thinking=False)
+                except Exception as e2:
+                    yield enc.failed(str(e2))
+                    return
+            else:
+                yield enc.failed(str(e))
+                return
         text = result.get("text", "")
         gen_images = result.get("images") or []
         if gen_images:
@@ -191,12 +227,15 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
         yield frame
     full_text = ""
     final_images = []
+    streamed_any = False
     try:
         async for evt in gemini_client.generate_stream(prompt, model, "", attachments,
-                                                        gem_id=gem_id, account_id=gem_account_id):
+                                                        gem_id=gem_id, account_id=gem_account_id,
+                                                        extended_thinking=extended_thinking):
             if evt.get("type") == "delta":
                 delta = evt.get("text", "")
                 if delta:
+                    streamed_any = True
                     full_text += delta
                     yield enc.text_delta(msg_id, 0, delta)
             elif evt.get("type") == "final":
@@ -208,8 +247,23 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
                 full_text = final_text
                 final_images = evt.get("images") or []
     except Exception as e:
-        yield enc.failed(str(e))
-        return
+        # 扩展思维链路径失败且尚未流出任何内容：退回非流式非思维链重试一次
+        if extended_thinking and not streamed_any:
+            logger.warning(f"extended-thinking stream failed, retrying normal: {e}")
+            try:
+                result = await gemini_client.generate(prompt, model, "", attachments,
+                                                      gem_id=gem_id, account_id=gem_account_id,
+                                                      extended_thinking=False)
+            except Exception as e2:
+                yield enc.failed(str(e2))
+                return
+            full_text = result.get("text", "")
+            final_images = result.get("images") or []
+            if full_text:
+                yield enc.text_delta(msg_id, 0, full_text)
+        else:
+            yield enc.failed(str(e))
+            return
 
     if final_images:
         md = _images_to_markdown(final_images, request)

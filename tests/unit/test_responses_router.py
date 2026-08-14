@@ -7,7 +7,7 @@ def test_responses_non_stream_text_reply(gem_client, monkeypatch):
     import app.routers.responses as rr
 
     async def fake_generate(prompt, model, conversation_id="", attachments=None,
-                            gem_id=None, account_id=None):
+                            gem_id=None, account_id=None, extended_thinking=False):
         assert model == "gemini-pro"
         return {"text": "Hello human", "conversation_id": "", "images": []}
 
@@ -49,7 +49,7 @@ def test_responses_with_tool_call_returns_function_call_item(gem_client, monkeyp
     import app.routers.responses as rr
 
     async def fake_generate(prompt, model, conversation_id="", attachments=None,
-                            gem_id=None, account_id=None):
+                            gem_id=None, account_id=None, extended_thinking=False):
         assert "run_shell" in prompt  # tool description injected into prompt
         return {"text": '{"status":"tool_use","tool_calls":[{"name":"run_shell","arguments":{"cmd":"ls"}}]}',
                "conversation_id": "", "images": []}
@@ -72,7 +72,7 @@ def test_responses_stream_emits_output_text_done_event(gem_client, monkeypatch):
     import app.routers.responses as rr
 
     async def fake_generate_stream(prompt, model, conversation_id="", attachments=None,
-                                   gem_id=None, account_id=None):
+                                   gem_id=None, account_id=None, extended_thinking=False):
         yield {"type": "delta", "text": "Hel"}
         yield {"type": "delta", "text": "lo"}
         yield {"type": "final", "text": "Hello", "conversation_id": "", "images": []}
@@ -93,7 +93,7 @@ def test_responses_stream_embeds_generated_images_as_markdown(gem_client, monkey
     import app.routers.responses as rr
 
     async def fake_generate_stream(prompt, model, conversation_id="", attachments=None,
-                                   gem_id=None, account_id=None):
+                                   gem_id=None, account_id=None, extended_thinking=False):
         yield {"type": "delta", "text": "Here"}
         yield {"type": "final", "text": "Here", "conversation_id": "",
               "images": [{"id": "img-999"}]}
@@ -135,7 +135,7 @@ def test_responses_non_stream_embeds_generated_images_as_markdown(gem_client, mo
     import app.routers.responses as rr
 
     async def fake_generate(prompt, model, conversation_id="", attachments=None,
-                            gem_id=None, account_id=None):
+                            gem_id=None, account_id=None, extended_thinking=False):
         return {"text": "here you go", "conversation_id": "",
                "images": [{"id": "img-123"}]}
 
@@ -153,7 +153,7 @@ def test_responses_stream_with_tools_buffers_and_emits_function_call_done(gem_cl
     import app.routers.responses as rr
 
     async def fake_generate(prompt, model, conversation_id="", attachments=None,
-                            gem_id=None, account_id=None):
+                            gem_id=None, account_id=None, extended_thinking=False):
         return {"text": '{"status":"tool_use","tool_calls":[{"name":"run_shell","arguments":{"cmd":"ls"}}]}',
                "conversation_id": "", "images": []}
 
