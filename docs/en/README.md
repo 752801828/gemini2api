@@ -58,6 +58,7 @@
 
 | Date | Update |
 |------|--------|
+| 2026-08-14 22:30:00 | v1.6.30 - 🧠 Playground 'Thinking' toggle: enable Gemini extended thinking from the model-testing panel; the reasoning shows as a collapsible block above the answer |
 | 2026-08-14 21:00:00 | v1.6.29 - 🧠 Native Gemini extended thinking: send `reasoning_effort` to enable thinking on pro/flash/flash-lite, returned as reasoning_content; default-on, one-click disable, auto-fallback so normal chat is unaffected; also fixed the flash-lite free-tier model id |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 New gemini-flash-lite model: exposes Gemini's lightest Flash-Lite tier (3.5 Flash-Lite), so there's still a usable model when Pro/Flash are rate-limited (mapped per-account to the real model behind the fixed public name) |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 Admin panel brand logo & favicon: replaced the top-left icon with a custom brand logo image (compressed to 128×128, ~16KB, ~97% smaller than the original); added a browser-tab favicon to the admin panel and login page (same logo) |

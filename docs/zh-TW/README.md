@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.29-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.30-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -59,6 +59,7 @@
 
 | 日期 | 更新內容 |
 |------|----------|
+| 2026-08-14 22:30:00 | v1.6.30 - 🧠 模型測試面板新增「思考」開關：勾選後對 Gemini 開啟擴展思考，思考過程以可折疊塊顯示在答案上方 |
 | 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 擴展思考：`reasoning_effort` 開啟，思考過程作為 reasoning_content 返回；預設開可一鍵關、失敗自動退回，不影響普通聊天；並修正 flash-lite 免費檔 ID |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最輕量的 Flash-Lite 檔（3.5 Flash-Lite），在 Pro/Flash 被限額時仍有可用模型可選（內部按帳號真實模型動態映射，沿用固定公開名） |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 與 Favicon：左上角圖示更換為自訂品牌 Logo 圖片（並壓縮至 128×128、約 16KB，較原圖縮小約 97%）；管理面板與登入頁新增瀏覽器分頁圖示（Favicon，使用同一 Logo） |
