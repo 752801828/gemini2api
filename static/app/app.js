@@ -666,6 +666,9 @@ async function sendPlaygroundRequest() {
     if (_pgConversationId) {
         reqBody.conversation_id = _pgConversationId;
     }
+    if (document.getElementById('pg-thinking')?.checked) {
+        reqBody.reasoning_effort = 'high';
+    }
 
     try {
         const resp = await fetch('/openai/v1/chat/completions', {
@@ -691,6 +694,22 @@ async function sendPlaygroundRequest() {
         let buffer = '';
         let content = '';
         let gotContent = false;
+        let reasoningBody = null;
+        const ensureReasoningBlock = () => {
+            if (reasoningBody) return reasoningBody;
+            const det = document.createElement('details');
+            det.className = 'pg-reasoning';
+            det.open = true;
+            const summary = document.createElement('summary');
+            summary.textContent = t('playground.reasoningTitle');
+            const body = document.createElement('div');
+            body.className = 'pg-reasoning-body';
+            det.appendChild(summary);
+            det.appendChild(body);
+            aiMsg.insertBefore(det, aiBubble);   // sibling ABOVE the answer bubble
+            reasoningBody = body;
+            return reasoningBody;
+        };
 
         while (true) {
             const { done, value } = await reader.read();
@@ -722,6 +741,12 @@ async function sendPlaygroundRequest() {
                         _pgClearGeneratingState(aiMsg, aiBubble);
                         content += piece;
                         aiBubble.textContent = content;
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+                    const rPiece = delta?.reasoning_content || '';
+                    if (rPiece) {
+                        const rb = ensureReasoningBlock();
+                        rb.textContent += rPiece;
                         chatContainer.scrollTop = chatContainer.scrollHeight;
                     }
                 } catch {}
