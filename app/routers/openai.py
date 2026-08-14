@@ -14,7 +14,7 @@ from app.core.api_forwarder import forward_to_provider, open_stream
 from app.core.fallback import fallback_enabled, is_empty_result, get_fallback_entries, openai_data_is_empty
 from app.core.conversation_store import conversation_store
 from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model
-from app.core.stream import split_into_chunks, format_sse
+from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME
 from app.models.openai import (
     ChatRequest, ChatResponse, Choice, ChoiceMessage,
     StreamChunk, StreamChoice, StreamDelta,
@@ -63,7 +63,7 @@ def _images_md_from_base(images: list, base: str) -> str:
     return "\n".join(lines)
 
 
-_SSE_KEEPALIVE_INTERVAL = 10.0  # 刷新前置代理 idle/read 计时器（pro 生图链路更长，缩短间隔）
+_SSE_KEEPALIVE_INTERVAL = SSE_KEEPALIVE_INTERVAL  # 单一来源见 app/core/stream.py
 
 
 async def _sse_keepalive_during(task: asyncio.Task, interval: float = _SSE_KEEPALIVE_INTERVAL):
@@ -482,9 +482,13 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
     streamed_any = False
     emitted_thoughts = ""  # 已发出的思维链前缀，用于跟已知累积 thoughts 做前缀 diff 只发增量
     try:
-        async for evt in gemini_client.generate_stream(prompt, model, gemini_conv_id, attachments,
-                                                        gem_id=gem_id, account_id=account_id,
-                                                        extended_thinking=extended_thinking):
+        async for _kind, evt in iter_with_keepalive(
+            gemini_client.generate_stream(prompt, model, gemini_conv_id, attachments,
+                                          gem_id=gem_id, account_id=account_id,
+                                          extended_thinking=extended_thinking)):
+            if _kind == "ping":
+                yield SSE_KEEPALIVE_FRAME
+                continue
             if evt.get("type") == "delta":
                 # generate_stream 现在是严格 append-only（不再发 _replace），delta 总是新增尾部
                 delta = evt.get("text", "")
