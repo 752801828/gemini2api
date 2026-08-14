@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
-from app.core.stream import split_into_chunks, format_sse
+from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_FRAME
 from app.models.claude import (
     ClaudeRequest, ClaudeResponse, ContentBlock, ClaudeUsage,
     ClaudeModelInfo, ClaudeModelList,
@@ -218,8 +218,12 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
 
     full_text = ""
     try:
-        async for evt in gemini_client.generate_stream(prompt, model, "", attachments,
-                                                        gem_id=gem_id, account_id=account_id):
+        async for _kind, evt in iter_with_keepalive(
+            gemini_client.generate_stream(prompt, model, "", attachments,
+                                          gem_id=gem_id, account_id=account_id)):
+            if _kind == "ping":
+                yield SSE_KEEPALIVE_FRAME
+                continue
             if evt.get("type") == "delta":
                 # generate_stream 现在是严格 append-only（不再发 _replace），delta 总是新增尾部
                 delta = evt.get("text", "")
