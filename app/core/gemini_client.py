@@ -1121,6 +1121,7 @@ class GeminiWebClient:
         """真流式：用独立临时 AsyncSession 流式读 StreamGenerate，逐帧产出文本增量。
 
         产出事件：
+          {"type": "thoughts", "text": <思考增量>}      —— 流式过程中多次（同帧内先于 delta）
           {"type": "delta", "text": <新增文本>}        —— 流式过程中多次
           {"type": "final", "text": <完整文本>,
            "conversation_id": <会话ID>, "images": [...]}  —— 收尾一次
@@ -1179,7 +1180,8 @@ class GeminiWebClient:
         emitted = ""             # 已 yield 出去的完整文本（用于和新帧比前缀算增量）
         last_text = ""           # 最新一帧的完整文本
         last_conv = ""
-        last_thoughts = ""       # 累积思维链（本任务只收集，增量 emit 留给后续任务）
+        last_thoughts = ""       # 累积思维链（最新一帧的完整思考文本，final 兜底用）
+        emitted_thoughts = ""    # 已 yield 出去的思维链前缀（逐帧增量用）
         last_images: list = []
         chunk_timeout = 120      # 单个 chunk 最长等待（兜底 #215 timeout 失效）
 
@@ -1212,6 +1214,12 @@ class GeminiWebClient:
                                 last_conv = conv
                             if thoughts:
                                 last_thoughts = thoughts
+                            if thoughts and len(thoughts) > len(emitted_thoughts) \
+                                    and thoughts.startswith(emitted_thoughts):
+                                t_delta = thoughts[len(emitted_thoughts):]
+                                emitted_thoughts = thoughts
+                                if t_delta:
+                                    yield {"type": "thoughts", "text": t_delta}
                             imgs = self._images_from_wrb(elem)
                             if imgs:
                                 last_images = imgs
