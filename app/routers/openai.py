@@ -514,11 +514,8 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                 # 这里仍按「已发出前缀 diff」的方式只发新增部分，为未来逐帧增量留好口子；
                 # 在文本尾部补发之前先发，保证客户端先看到 reasoning 再看到最终回答。
                 final_thoughts = evt.get("thoughts", "") or ""
-                if final_thoughts != emitted_thoughts:
-                    if final_thoughts.startswith(emitted_thoughts):
-                        thoughts_delta = final_thoughts[len(emitted_thoughts):]
-                    else:
-                        thoughts_delta = final_thoughts
+                if final_thoughts != emitted_thoughts and final_thoughts.startswith(emitted_thoughts):
+                    thoughts_delta = final_thoughts[len(emitted_thoughts):]
                     emitted_thoughts = final_thoughts
                     if thoughts_delta:
                         chunk = StreamChunk(
@@ -526,6 +523,7 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                             choices=[StreamChoice(delta=StreamDelta(reasoning_content=thoughts_delta))],
                         )
                         yield format_sse(chunk.model_dump())
+                # else: divergent/shrunk final thoughts — reasoning already streamed; do NOT re-emit whole (avoid duplicate)
                 # final.text 是过滤完占位串的完整文本，可能比已流出的 full_text 多出
                 # （流式时被 hold 住的尾部）。补发缺失尾部，保证客户端拿到完整内容。
                 final_text = evt.get("text", full_text)
