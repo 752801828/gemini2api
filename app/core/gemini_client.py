@@ -1,6 +1,7 @@
 import re
 import json
 import time
+import uuid
 import random
 import asyncio
 import logging
@@ -135,6 +136,24 @@ def _build_model_header(model_name: str) -> dict[str, str]:
         MODEL_HEADER_KEY: f'[1,null,null,null,"{model_info["id"]}",null,null,0,[4],null,null,{model_info["capacity"]}]',
         "x-goog-ext-73010989-jspb": "[0]",
         "x-goog-ext-73010990-jspb": "[0]",
+    }
+
+
+def _build_model_header_thinking(model_name: str, session_uuid: str) -> dict[str, str]:
+    """PR#310 17-element model header with the extended-thinking flag (=2)."""
+    resolved = _resolve_model(model_name)
+    info = GEMINI_MODELS.get(resolved)
+    if not info:
+        return {}
+    mn = int(info.get("model_number", 1))
+    arr = [1, None, None, None, info["id"], None, None, 0, [4, 5, 6, 8],
+           None, None, info["capacity"], None, None, mn]
+    arr.append(2)               # 2 = extended thinking (1 = standard)
+    arr.append(session_uuid)
+    return {
+        MODEL_HEADER_KEY: json.dumps(arr),
+        "x-goog-ext-73010989-jspb": "[0]",
+        "x-goog-ext-73010990-jspb": "[0,0,0]",
     }
 
 
@@ -343,6 +362,7 @@ class GeminiWebClient:
     def __init__(self, psid: str | None = None, psidts: str | None = None):
         self._psid = psid or settings.gemini_psid
         self._psidts = psidts or settings.gemini_psidts
+        self._session_uuid: str = str(uuid.uuid4()).upper()
         self._session_token: str = ""
         self._push_id: str = ""
         self._available_models: list[str] = []
@@ -1000,6 +1020,41 @@ class GeminiWebClient:
         inner = json.dumps(inner_list)
         outer = json.dumps([None, inner])
         return outer
+
+    def _encode_payload_thinking(self, prompt: str, model: str, conversation_id: str = "",
+                                 file_ids: list | None = None, gem_id: str | None = None) -> tuple[str, str]:
+        """PR#310 81-element thinking-path payload encoder (isolated from _encode_payload)."""
+        DEFAULT_METADATA = ["", "", "", None, None, None, None, None, None, ""]
+        if file_ids:
+            file_data = [[[fid], fname] for fid, fname in file_ids]
+            message_content = [prompt, 0, None, file_data, None, None, 0]
+        else:
+            message_content = [prompt, 0, None, None, None, None, 0]
+        mn = _model_number(model)
+        uuid_val = str(uuid.uuid4()).upper()
+        inner: list = [None] * 81
+        inner[0] = message_content
+        inner[1] = ["en"]
+        inner[2] = DEFAULT_METADATA          # conversation continuation not used on thinking path (spec §4.3)
+        inner[6] = [1]
+        inner[7] = 1                          # STREAMING_FLAG_INDEX
+        inner[10] = 1
+        inner[11] = 0
+        inner[17] = [[0]]
+        inner[18] = 0
+        if gem_id:
+            inner[19] = gem_id                # GEM_FLAG_INDEX
+        inner[27] = 1
+        inner[30] = [4]
+        inner[41] = [1]
+        inner[53] = 0
+        inner[59] = uuid_val
+        inner[61] = []
+        inner[68] = 1
+        inner[79] = mn
+        inner[80] = 2                         # 2 = extended thinking
+        outer = json.dumps([None, json.dumps(inner)])
+        return outer, uuid_val
 
     async def generate(self, prompt: str, model: str, conversation_id: str = "",
                        attachments: list | None = None, gem_id: str | None = None) -> dict:
