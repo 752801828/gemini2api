@@ -642,7 +642,7 @@ async function sendPlaygroundRequest() {
     aiMsg.className = 'chat-message assistant';
     aiMsg.innerHTML = `
         <div class="chat-avatar"><i class="fas fa-microchip"></i></div>
-        <div class="chat-bubble"><span class="typing-cursor"></span></div>
+        <div class="chat-content"><div class="chat-bubble"><span class="typing-cursor"></span></div></div>
     `;
     chatContainer.appendChild(aiMsg);
     const aiBubble = aiMsg.querySelector('.chat-bubble');
@@ -706,7 +706,7 @@ async function sendPlaygroundRequest() {
             body.className = 'pg-reasoning-body';
             det.appendChild(summary);
             det.appendChild(body);
-            aiMsg.insertBefore(det, aiBubble);   // sibling ABOVE the answer bubble
+            aiBubble.parentNode.insertBefore(det, aiBubble);   // .chat-content column: reasoning ABOVE the answer bubble
             reasoningBody = body;
             return reasoningBody;
         };
