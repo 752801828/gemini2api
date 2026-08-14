@@ -37,14 +37,16 @@ def test_reraises_upstream_exception_after_draining():
         yield "ok"
         raise ValueError("upstream failed")
 
+    holder = {"got": []}
+
     async def _drive():
-        got = []
         async for kv in iter_with_keepalive(_boom(), interval=5.0):
-            got.append(kv)
-        return got
+            holder["got"].append(kv)
 
     with pytest.raises(ValueError, match="upstream failed"):
         asyncio.run(_drive())
+    # 关键断言：抛异常前，"ok" 事件必须先被投递（而不是异常直接吞掉未耗尽的事件）
+    assert ("evt", "ok") in holder["got"]
 
 
 def test_early_break_cancels_pump_no_leak():
