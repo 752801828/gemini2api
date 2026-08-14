@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.31-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.32-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -59,6 +59,7 @@
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-08-14 22:50:00 | v1.6.32 - 🧠 思考内容逐帧流式：原生 Gemini 的思考过程在生成阶段就作为 reasoning_content 逐帧增量流出（/v1/chat/completions），思考先于答案显示、带打字机效果，修复面板「答案早于思考」；收尾仍带完整思考兜底，不开思考/普通对话零回归 |
 | 2026-08-14 22:40:00 | v1.6.31 - 🌊 修复流式连接偶发中断：为全部四条流式接口（/v1/chat/completions、/v1/responses、/v1/messages、native Gemini streamGenerateContent）在等待模型生成的静默期补发保活心跳，避免长响应被跨境/网关空闲超时掐断；并修正面板误导的网络错误提示 |
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 模型测试面板新增「思考」开关：勾选后对 Gemini 开启扩展思考，思考过程以可折叠块显示在答案上方 |
 | 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 扩展思考：`reasoning_effort` 开启，思考过程作为 reasoning_content 返回；默认开可一键关、失败自动退回，不影响普通聊天；并修正 flash-lite 免费档 ID |
