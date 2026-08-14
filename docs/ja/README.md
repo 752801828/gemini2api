@@ -58,6 +58,7 @@
 
 | 日付 | 更新内容 |
 |------|----------|
+| 2026-08-14 21:00:00 | v1.6.29 - 🧠 ネイティブ Gemini 拡張思考：`reasoning_effort` を送信して pro/flash/flash-lite での思考を有効にし、reasoning_content として返す；デフォルトはオン、ワンクリック無効化、自動フォールバックで通常チャットに影響なし；また flash-lite 無料層モデル ID を修正 |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 gemini-flash-lite モデルを追加：Gemini の最軽量 Flash-Lite（3.5 Flash-Lite）を公開。Pro/Flash がレート制限されても利用可能なモデルを選べます（固定公開名の背後でアカウントの実モデルに動的マッピング） |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理パネルのブランドロゴとファビコン：左上のアイコンをカスタムブランドロゴ画像に変更（128×128・約16KBに圧縮、元画像より約97%削減）；管理パネルとログインページにブラウザタブ用ファビコンを追加（同じロゴを使用） |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 新規 OpenAI Responses API 対応（`/v1/responses` または `/openai/v1/responses`）：Chat Completions ではなく新しい Responses プロトコルを必要とするクライアント（例: Codex CLI。2026 年 2 月に Chat Completions のサポートを終了）が gemini2api を利用できるように——テキストチャット、ストリーミング、関数/ツール呼び出しに対応、Gemini モデルと API 管理で設定したサードパーティモデルの両方で利用可；ストリーミングイベントは公式プロトコルの順序を厳密に遵守（既知のリファレンス実装が省略している 2 つの終端イベント response.output_text.done / response.function_call_arguments.done を修正）；サーバー側のマルチターン状態は保持せず——previous_response_id は継続性を黙って偽装せず明確なエラーを返す（Codex CLI などのクライアントは会話履歴全体を自ら再送するため） |

@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.28-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.29-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -59,6 +59,7 @@
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 扩展思考：`reasoning_effort` 开启，思考过程作为 reasoning_content 返回；默认开可一键关、失败自动退回，不影响普通聊天；并修正 flash-lite 免费档 ID |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最轻量的 Flash-Lite 档（3.5 Flash-Lite），在 Pro/Flash 被限额时仍有可用模型可选（内部按账号真实模型动态映射，沿用固定公开名） |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 与 Favicon：左上角图标更换为自定义品牌 Logo 图片（并压缩至 128×128、约 16KB，较原图缩小约 97%）；管理面板与登录页新增浏览器标签页图标（Favicon，使用同一 Logo） |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 新增 OpenAI Responses API 支持（`/v1/responses` 或 `/openai/v1/responses`）：让需要新版 Responses 协议的客户端（如 2026 年 2 月起砍掉 Chat Completions 支持的 Codex CLI）能正常接入 gemini2api——支持文本对话、流式输出、工具调用，Gemini 模型和 API 管理配置的第三方模型均可使用；流式事件严格遵循官方协议顺序（修正了参考实现已知会漏发的两个关键事件：`response.output_text.done` / `response.function_call_arguments.done`）；不支持服务端多轮状态（`previous_response_id` 会明确报错而非假装续上），因为 Codex CLI 本身会重发完整对话历史 |

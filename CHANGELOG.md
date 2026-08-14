@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [1.6.29] - 2026-08-14
+
+### Added
+- 🧠 **原生 Gemini 扩展思考**：请求带 `reasoning_effort` 即可让 Gemini（pro/flash/flash-lite）开启扩展思考，并把思考过程作为 `reasoning_content`（Responses 为 reasoning 项）返回。默认开启，可在设置里 `extended_thinking_enabled` 一键关闭；仅在请求思考时启用、失败自动退回普通格式，不影响普通聊天。
+
+### Fixed
+- 修正 `gemini-flash-lite` 免费档内部模型 ID（付费档不变）。
+
 ## [1.6.28] - 2026-07-30
 
 ### Added
