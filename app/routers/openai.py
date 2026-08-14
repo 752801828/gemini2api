@@ -500,6 +500,15 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                         choices=[StreamChoice(delta=StreamDelta(content=delta))],
                     )
                     yield format_sse(chunk.model_dump())
+            elif evt.get("type") == "thoughts":
+                t_delta = evt.get("text", "")
+                if t_delta:
+                    emitted_thoughts += t_delta
+                    chunk = StreamChunk(
+                        id=completion_id, model=model_name,
+                        choices=[StreamChoice(delta=StreamDelta(reasoning_content=t_delta))],
+                    )
+                    yield format_sse(chunk.model_dump())
             elif evt.get("type") == "final":
                 # 思维链目前只在 final 帧一次性拿到完整累积 thoughts（底层暂不逐帧增量），
                 # 这里仍按「已发出前缀 diff」的方式只发新增部分，为未来逐帧增量留好口子；
