@@ -19,7 +19,8 @@ def test_chat_with_gem_model_passes_gem_id(gem_client, monkeypatch):
     }, headers=_AUTH)
 
     captured = {}
-    async def fake_generate(prompt, model, conversation_id="", attachments=None, gem_id=None, account_id=None):
+    async def fake_generate(prompt, model, conversation_id="", attachments=None, gem_id=None, account_id=None,
+                            extended_thinking=False):
         captured.update(model=model, gem_id=gem_id, account_id=account_id)
         return {"text": "hi", "images": [], "conversation_id": "c1"}
 

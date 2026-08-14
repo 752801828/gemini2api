@@ -455,7 +455,7 @@ class AccountPool:
 
     async def generate(self, prompt: str, model: str, conversation_id: str = "",
                        attachments: list | None = None, gem_id: str | None = None,
-                       account_id: str | None = None) -> dict:
+                       account_id: str | None = None, extended_thinking: bool = False) -> dict:
         # failover：某账号被可重试错误（5xx/未就绪/401·403）打回时，换下一个 active 账号重试，
         # 直到成功或无更多账号可试。5xx 限流账号进入冷却，401/403 标 expired。
         tried: set = set()
@@ -482,7 +482,8 @@ class AccountPool:
             t0 = time.time()
             released = False
             try:
-                result = await account.client.generate(prompt, model, conversation_id, attachments, gem_id)
+                result = await account.client.generate(prompt, model, conversation_id, attachments, gem_id,
+                                                        extended_thinking)
                 live_metrics.record_request(model, (time.time() - t0) * 1000)
                 await self.release(account, success=True)
                 released = True
@@ -509,7 +510,7 @@ class AccountPool:
 
     async def generate_stream(self, prompt: str, model: str, conversation_id: str = "",
                               attachments: list | None = None, gem_id: str | None = None,
-                              account_id: str | None = None):
+                              account_id: str | None = None, extended_thinking: bool = False):
         """真流式：持有账号槽位直到整个流结束，再 release。
         逐块产出 {"type":"delta","text":增量} ，最后产出 {"type":"final", ...}（含会话ID/图片）。
 
@@ -540,7 +541,8 @@ class AccountPool:
             failover = False
             released = False
             try:
-                async for evt in account.client.generate_stream(prompt, model, conversation_id, attachments, gem_id):
+                async for evt in account.client.generate_stream(prompt, model, conversation_id, attachments, gem_id,
+                                                                  extended_thinking):
                     emitted_any = True
                     yield evt
                 live_metrics.record_request(model, (time.time() - t0) * 1000)
