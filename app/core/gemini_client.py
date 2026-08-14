@@ -265,32 +265,38 @@ def _scan_complete_wrb_frames(buf: str) -> tuple[list, int]:
     return frames, consumed
 
 
-def _extract_text_from_wrb(elem: list) -> tuple[str | None, str]:
-    """从单个 wrb.fr 帧提取 (累积文本, 会话ID)。非文本帧返回 (None, "")。
+def _extract_text_from_wrb(elem: list) -> tuple[str | None, str, str]:
+    """从单个 wrb.fr 帧提取 (累积文本, 会话ID, 思维链)。非文本帧返回 (None, "", "")。
     文本路径 payload[4][0][1][0]；会话ID 用 str(payload[1])，与非流式 _parse_output
     逐字节一致（会话ID 会存进 conversation_store，下轮回传给 _encode_payload 续接会话，
-    流式与非流式必须同格式，否则多轮对话续接会错乱）。
+    流式与非流式必须同格式，否则多轮对话续接会错乱）。思维链路径 payload[4][0][37][0][0]
+    （extended thinking 开启时才有，与 _parse_output 保持一致）。
     """
     try:
         if not isinstance(elem, list) or len(elem) < 3 or elem[0] != "wrb.fr":
-            return None, ""
+            return None, "", ""
         rp = elem[2]
         if not isinstance(rp, str):
-            return None, ""
+            return None, "", ""
         payload = json.loads(rp)
         if not isinstance(payload, list) or len(payload) < 5:
-            return None, ""
+            return None, "", ""
         conv = str(payload[1]) if payload[1] else ""
         text = None
         cands = payload[4]
+        c0 = None
         if isinstance(cands, list) and cands:
             c0 = cands[0]
             if isinstance(c0, list) and len(c0) > 1 and isinstance(c0[1], list) \
                     and c0[1] and isinstance(c0[1][0], str):
                 text = c0[1][0]
-        return text, conv
+        thoughts = ""
+        if isinstance(c0, list) and len(c0) > 37 and isinstance(c0[37], list) and c0[37] \
+                and isinstance(c0[37][0], list) and c0[37][0] and isinstance(c0[37][0][0], str):
+            thoughts = c0[37][0][0]
+        return text, conv, thoughts
     except Exception:
-        return None, ""
+        return None, "", ""
 
 
 MODEL_VALID_PATTERN = re.compile(
@@ -1057,7 +1063,8 @@ class GeminiWebClient:
         return outer, uuid_val
 
     async def generate(self, prompt: str, model: str, conversation_id: str = "",
-                       attachments: list | None = None, gem_id: str | None = None) -> dict:
+                       attachments: list | None = None, gem_id: str | None = None,
+                       extended_thinking: bool = False) -> dict:
         if not self._healthy:
             # 单账号自愈：抛错前单飞重载一次 Cookie，缓解会话约 2h 到期后的硬失败（Issue#1-C）
             async with self._heal_lock:
@@ -1082,7 +1089,8 @@ class GeminiWebClient:
         max_5xx = max(0, settings.same_account_5xx_retries)
         for attempt in range(settings.max_retries):
             try:
-                return await self._send_request(prompt, model, conversation_id, attachments, gem_id)
+                return await self._send_request(prompt, model, conversation_id, attachments, gem_id,
+                                                 extended_thinking)
             except HTTPStatusError as e:
                 last_err = e
                 status = e.status_code
@@ -1108,7 +1116,8 @@ class GeminiWebClient:
         raise RuntimeError(f"Exhausted {settings.max_retries} retries: {last_err}")
 
     async def generate_stream(self, prompt: str, model: str, conversation_id: str = "",
-                              attachments: list | None = None, gem_id: str | None = None):
+                              attachments: list | None = None, gem_id: str | None = None,
+                              extended_thinking: bool = False):
         """真流式：用独立临时 AsyncSession 流式读 StreamGenerate，逐帧产出文本增量。
 
         产出事件：
@@ -1153,17 +1162,24 @@ class GeminiWebClient:
             if not file_ids:
                 logger.warning("All attachment uploads failed, streaming text-only")
 
-        encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+        if extended_thinking:
+            encoded, uuid_val = self._encode_payload_thinking(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header_thinking(resolved, self._session_uuid)
+        else:
+            encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header(resolved)
         form_data = {"at": self._session_token, "f.req": encoded}
         headers = self._get_headers("POST", content_type="application/x-www-form-urlencoded")
-        model_headers = _build_model_header(resolved)
         if model_headers:
             headers.update(model_headers)
+        if extended_thinking:
+            headers["x-goog-ext-525005358-jspb"] = f'["{uuid_val}",1]'
 
         buf = ""
         emitted = ""             # 已 yield 出去的完整文本（用于和新帧比前缀算增量）
         last_text = ""           # 最新一帧的完整文本
         last_conv = ""
+        last_thoughts = ""       # 累积思维链（本任务只收集，增量 emit 留给后续任务）
         last_images: list = []
         chunk_timeout = 120      # 单个 chunk 最长等待（兜底 #215 timeout 失效）
 
@@ -1191,9 +1207,11 @@ class GeminiWebClient:
                         if consumed:
                             buf = buf[consumed:]
                         for elem in frames:
-                            text, conv = _extract_text_from_wrb(elem)
+                            text, conv, thoughts = _extract_text_from_wrb(elem)
                             if conv:
                                 last_conv = conv
+                            if thoughts:
+                                last_thoughts = thoughts
                             imgs = self._images_from_wrb(elem)
                             if imgs:
                                 last_images = imgs
@@ -1229,7 +1247,7 @@ class GeminiWebClient:
             except Exception:
                 pass
 
-        yield await self._finalize_stream(last_text, last_conv, last_images)
+        yield await self._finalize_stream(last_text, last_conv, last_images, last_thoughts)
 
     def _images_from_wrb(self, elem: list) -> list:
         """从单个 wrb.fr 帧提取 AI 生成图片（复用 _extract_generated_images）。"""
@@ -1246,8 +1264,11 @@ class GeminiWebClient:
         except Exception:
             return []
 
-    async def _finalize_stream(self, text: str, conv_id: str, images: list) -> dict:
-        """流式收尾：下载/存生成图、过滤占位 URL，组装与 _send_request 一致的 final 结果。"""
+    async def _finalize_stream(self, text: str, conv_id: str, images: list, thoughts: str = "") -> dict:
+        """流式收尾：下载/存生成图、过滤占位 URL，组装与 _send_request 一致的 final 结果。
+        thoughts 目前只是把完整累积思维链原样带上（与 conversation_id 一样一次性给出）；
+        真正的思维链增量流式 emit 留给后续任务实现。
+        """
         result_images: list = []
         if images:
             cookies = self._get_cookies()
@@ -1262,10 +1283,12 @@ class GeminiWebClient:
             "text": text,
             "conversation_id": conv_id,
             "images": result_images,
+            "thoughts": thoughts,
         }
 
     async def _send_request(self, prompt: str, model: str, conversation_id: str = "",
-                           attachments: list | None = None, gem_id: str | None = None) -> dict:
+                           attachments: list | None = None, gem_id: str | None = None,
+                           extended_thinking: bool = False) -> dict:
         await apply_jitter("api_call")
         await self._ensure_session_current()
         self._clear_session_cookies()
@@ -1284,13 +1307,18 @@ class GeminiWebClient:
             if not file_ids:
                 logger.warning("All attachment uploads failed, falling back to text-only")
 
-        encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+        if extended_thinking:
+            encoded, uuid_val = self._encode_payload_thinking(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header_thinking(resolved, self._session_uuid)
+        else:
+            encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header(resolved)
         form_data = {"at": self._session_token, "f.req": encoded}
         headers = self._get_headers("POST", content_type="application/x-www-form-urlencoded")
-
-        model_headers = _build_model_header(resolved)
         if model_headers:
             headers.update(model_headers)
+        if extended_thinking:
+            headers["x-goog-ext-525005358-jspb"] = f'["{uuid_val}",1]'
 
         gen_timeout = (
             _GENERATE_TIMEOUT_IMAGE if maybe_image_generation_intent(prompt)
@@ -1386,6 +1414,7 @@ class GeminiWebClient:
     def _parse_output(self, raw: str) -> dict:
         lines = raw.strip().split("\n")
         text_content = ""
+        thoughts_content = ""
         conv_id = ""
         images: list[dict] = []
 
@@ -1421,6 +1450,10 @@ class GeminiWebClient:
                     parts = candidate[1]
                     if isinstance(parts, list) and parts and isinstance(parts[0], str):
                         text_content = parts[0]
+                    if len(candidate) > 37 and isinstance(candidate[37], list) and candidate[37] \
+                            and isinstance(candidate[37][0], list) and candidate[37][0] \
+                            and isinstance(candidate[37][0][0], str):
+                        thoughts_content = candidate[37][0][0]
                 # AI 生成图片：candidate[12][7][0] 是图片数组（实测确认）
                 imgs = self._extract_generated_images(candidate)
                 if imgs:
@@ -1438,7 +1471,7 @@ class GeminiWebClient:
             if had_placeholder and not text_content and not images:
                 text_content = "（没有生成图片。试试更明确的生成指令，如「画一张…」「生成一张…的图片」。）"
 
-        return {"text": text_content, "conversation_id": conv_id, "images": images}
+        return {"text": text_content, "conversation_id": conv_id, "images": images, "thoughts": thoughts_content}
 
     @staticmethod
     def _extract_generated_images(candidate: list) -> list[dict]:

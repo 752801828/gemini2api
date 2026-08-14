@@ -52,3 +52,25 @@ def test_normal_encoders_unchanged():
     c = GeminiWebClient.__new__(GeminiWebClient)
     out = c._encode_payload("hello", "gemini-pro", "", None)
     assert out == json.dumps([None, json.dumps([["hello"], None, None, "gemini-pro"])])
+
+
+def test_parse_output_extracts_thoughts():
+    c = GeminiWebClient.__new__(GeminiWebClient)
+    # payload[4][0] = candidate; [1][0]=answer, [37][0][0]=thoughts
+    cand = [None]*38
+    cand[1] = ["the answer"]
+    cand[37] = [["my chain of thought"]]
+    payload = [None, "conv-1", None, None, [cand]]
+    raw = ")]}'\n" + json.dumps([["wrb.fr", None, json.dumps(payload)]])
+    out = c._parse_output(raw)
+    assert out["text"] == "the answer"
+    assert out["thoughts"] == "my chain of thought"
+
+def test_parse_output_no_thoughts_empty():
+    c = GeminiWebClient.__new__(GeminiWebClient)
+    cand = [None]*2
+    cand[1] = ["answer only"]
+    payload = [None, "c", None, None, [cand]]
+    raw = ")]}'\n" + json.dumps([["wrb.fr", None, json.dumps(payload)]])
+    out = c._parse_output(raw)
+    assert out["thoughts"] == ""
