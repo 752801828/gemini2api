@@ -526,6 +526,7 @@ response = client.chat.completions.create(
 - [x] Auto-cleanup of accumulated web sessions (periodically delete old sessions, keep pinned)
 - [ ] Image/file upload support
 - [x] [issues #2](https://github.com/xwteam/gemini2api/issues/2) Custom Gemini Gem support (panel list / create / update / delete + expose as a model name)
+- [x] [issues #6](https://github.com/xwteam/gemini2api/issues/6) [#7](https://github.com/xwteam/gemini2api/issues/7) Native Gemini extended thinking (enable via `reasoning_effort`; reasoning streams frame-by-frame before the answer + "Thinking" toggle in the Playground panel + one-click off, never affects normal chat)
 - [x] Gemini fallback toggle in API Management (instant on/off with persistence, no .env edit or restart needed)
 
 ---

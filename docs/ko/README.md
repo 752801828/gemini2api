@@ -410,6 +410,7 @@ print(msg.content[0].text)
 - [ ] 이미지/파일 업로드 지원
 - [x] 웹 측 누적 세션 자동 정리(오래된 세션 정기 삭제, 고정 세션 보존)
 - [x] [issues #2](https://github.com/xwteam/gemini2api/issues/2) 사용자 지정 Gemini Gem 지원(패널 목록/생성/수정/삭제 + 모델 이름으로 노출)
+- [x] [issues #6](https://github.com/xwteam/gemini2api/issues/6) [#7](https://github.com/xwteam/gemini2api/issues/7) 네이티브 Gemini 확장 사고 지원(`reasoning_effort`로 활성화, 사고가 프레임 단위로 스트리밍되어 답변보다 먼저 표시 + 모델 테스트 패널 "사고" 토글 + 원클릭 끄기, 일반 채팅에 영향 없음)
 - [x] API 관리 페이지 Gemini 폴백 토글(즉시 온/오프 및 영구 저장, .env 수정·재시작 불필요)
 
 ---

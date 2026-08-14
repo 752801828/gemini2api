@@ -527,6 +527,7 @@ response = client.chat.completions.create(
 - [ ] 圖片/檔案上傳支援
 - [x] 自動清理網頁端堆積會話（定時刪除舊會話，置頂保留）
 - [x] [issues #2](https://github.com/xwteam/gemini2api/issues/2) 自訂 Gemini Gem 支援（管理面板列出/新建/修改/刪除 + 暴露為模型名呼叫）
+- [x] [issues #6](https://github.com/xwteam/gemini2api/issues/6) [#7](https://github.com/xwteam/gemini2api/issues/7) 原生 Gemini 擴展思考支援（`reasoning_effort` 開啟，思考過程逐幀串流、先於答案顯示 + 模型測試面板「思考」開關 + 一鍵關不影響一般聊天）
 - [x] API 管理頁 Gemini 兜底一鍵開關（即時開/關兜底鏈並持久化，無需改 .env 重啟）
 
 ---

@@ -526,6 +526,7 @@ response = client.chat.completions.create(
 - [ ] 画像/ファイルアップロード対応
 - [x] ウェブ側蓄積セッションの自動クリーンアップ（古いセッションを定期削除、ピン留めは保持）
 - [x] [issues #2](https://github.com/xwteam/gemini2api/issues/2) カスタム Gemini Gem 対応（パネルで一覧/作成/編集/削除 + モデル名として公開）
+- [x] [issues #6](https://github.com/xwteam/gemini2api/issues/6) [#7](https://github.com/xwteam/gemini2api/issues/7) ネイティブ Gemini 拡張思考対応（`reasoning_effort` で有効化、思考はフレーム単位でストリーミングされ回答より先に表示 + モデルテストパネルの「思考」トグル + ワンクリックでオフ、通常チャットに影響なし）
 - [x] API 管理ページの Gemini フォールバックトグル（即時オン/オフ・永続化、.env 編集・再起動不要）
 
 ---
