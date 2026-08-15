@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="../logo.png" width="128" height="128" alt="Gemini2API">
+
 <h1>Gemini2API</h1>
 <h3>輕量級 Gemini Web 反向代理</h3>
 <p>一套程式碼相容 OpenAI / Claude / Gemini 三大主流 AI SDK，純非同步架構，零官方 Key，Docker 快速部署。</p>

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="../logo.png" width="128" height="128" alt="Gemini2API">
+
 <h1>Gemini2API</h1>
 <h3>Lightweight Gemini Web Reverse Proxy</h3>
 <p>Single codebase compatible with OpenAI / Claude / Gemini SDKs, pure async architecture, zero official keys, Docker quick deployment.</p>

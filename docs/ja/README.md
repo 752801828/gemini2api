@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="../logo.png" width="128" height="128" alt="Gemini2API">
+
 <h1>Gemini2API</h1>
 <h3>軽量 Gemini Web リバースプロキシ</h3>
 <p>単一コードベースで OpenAI / Claude / Gemini の 3 つの主流 AI SDK に対応、純非同期アーキテクチャ、公式キー不要、Docker で高速デプロイ。</p>

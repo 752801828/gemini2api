@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="../logo.png" width="128" height="128" alt="Gemini2API">
+
 <h1>Gemini2API</h1>
 <h3>경량 Gemini Web 리버스 프록시</h3>
 <p>단일 코드베이스로 OpenAI / Claude / Gemini 3대 주류 AI SDK 호환, 순수 비동기 아키텍처, 공식 키 불필요, Docker 빠른 배포.</p>
