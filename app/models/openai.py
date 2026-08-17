@@ -31,12 +31,14 @@ class ChatRequest(BaseModel):
     tools: list[ToolDef] | None = None
     tool_choice: Any = None
     conversation_id: str | None = None
+    reasoning_effort: str | None = None
 
 
 class ChoiceMessage(BaseModel):
     role: str = "assistant"
     content: str | None = None
     tool_calls: list[dict] | None = None
+    reasoning_content: str | None = None
 
 
 class Choice(BaseModel):
@@ -65,6 +67,7 @@ class StreamDelta(BaseModel):
     role: str | None = None
     content: str | None = None
     tool_calls: list[dict] | None = None
+    reasoning_content: str | None = None
 
 
 class StreamChoice(BaseModel):

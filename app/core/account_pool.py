@@ -809,7 +809,8 @@ class AccountPool:
 
     async def generate(self, prompt: str, model: str, conversation_id: str = "",
                        attachments: list | None = None, gem_id: str | None = None,
-                       account_id: str | None = None) -> dict:
+                       account_id: str | None = None,
+                       extended_thinking: bool = False) -> dict:
         self._request_count = getattr(self, "_request_count", 0) + 1
         request_started = time.time()
         # failover：某账号被可重试错误（5xx/未就绪/401·403）打回时，换下一个 active 账号重试，
@@ -836,7 +837,10 @@ class AccountPool:
             account_attempts += 1
             released = False
             try:
-                result = await account.client.generate(prompt, model, conversation_id, attachments, gem_id)
+                result = await account.client.generate(
+                    prompt, model, conversation_id, attachments, gem_id,
+                    extended_thinking,
+                )
                 live_metrics.record_request(model, (time.time() - request_started) * 1000)
                 await self.release(account, success=True)
                 released = True
@@ -867,7 +871,7 @@ class AccountPool:
 
     async def generate_stream(self, prompt: str, model: str, conversation_id: str = "",
                               attachments: list | None = None, gem_id: str | None = None,
-                              account_id: str | None = None):
+                              account_id: str | None = None, extended_thinking: bool = False):
         """真流式：持有账号槽位直到整个流结束，再 release。
         逐块产出 {"type":"delta","text":增量} ，最后产出 {"type":"final", ...}（含会话ID/图片）。
 
@@ -901,7 +905,10 @@ class AccountPool:
             try:
                 for same_account_attempt in range(2):
                     try:
-                        async for evt in account.client.generate_stream(prompt, model, conversation_id, attachments, gem_id):
+                        async for evt in account.client.generate_stream(
+                            prompt, model, conversation_id, attachments, gem_id,
+                            extended_thinking,
+                        ):
                             emitted_any = True
                             yield evt
                         if not emitted_any:

@@ -922,7 +922,7 @@ async function sendPlaygroundRequest() {
     aiMsg.className = 'chat-message assistant';
     aiMsg.innerHTML = `
         <div class="chat-avatar"><i class="fas fa-microchip"></i></div>
-        <div class="chat-bubble"><span class="typing-cursor"></span></div>
+        <div class="chat-content"><div class="chat-bubble"><span class="typing-cursor"></span></div></div>
     `;
     chatContainer.appendChild(aiMsg);
     const aiBubble = aiMsg.querySelector('.chat-bubble');
@@ -945,6 +945,9 @@ async function sendPlaygroundRequest() {
     };
     if (_pgConversationId) {
         reqBody.conversation_id = _pgConversationId;
+    }
+    if (document.getElementById('pg-thinking')?.checked) {
+        reqBody.reasoning_effort = 'high';
     }
 
     try {
@@ -971,6 +974,22 @@ async function sendPlaygroundRequest() {
         let buffer = '';
         let content = '';
         let gotContent = false;
+        let reasoningBody = null;
+        const ensureReasoningBlock = () => {
+            if (reasoningBody) return reasoningBody;
+            const det = document.createElement('details');
+            det.className = 'pg-reasoning';
+            det.open = true;
+            const summary = document.createElement('summary');
+            summary.textContent = t('playground.reasoningTitle');
+            const body = document.createElement('div');
+            body.className = 'pg-reasoning-body';
+            det.appendChild(summary);
+            det.appendChild(body);
+            aiBubble.parentNode.insertBefore(det, aiBubble);   // .chat-content column: reasoning ABOVE the answer bubble
+            reasoningBody = body;
+            return reasoningBody;
+        };
 
         while (true) {
             const { done, value } = await reader.read();
@@ -1002,6 +1021,12 @@ async function sendPlaygroundRequest() {
                         _pgClearGeneratingState(aiMsg, aiBubble);
                         content += piece;
                         aiBubble.textContent = content;
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+                    const rPiece = delta?.reasoning_content || '';
+                    if (rPiece) {
+                        const rb = ensureReasoningBlock();
+                        rb.textContent += rPiece;
                         chatContainer.scrollTop = chatContainer.scrollHeight;
                     }
                 } catch {}

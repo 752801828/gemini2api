@@ -1,8 +1,8 @@
 import re
 import json
 import time
-import random
 import uuid
+import random
 import asyncio
 import logging
 from pathlib import Path
@@ -47,18 +47,18 @@ BATCHEXECUTE_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute"
 MODEL_HEADER_KEY = "x-goog-ext-525001261-jspb"
 
 GEMINI_MODELS = {
-    "gemini-3-pro": {"id": "9d8ca3786ebdfbea", "capacity": 1, "pro_only": False, "family": "pro"},
-    "gemini-3-flash": {"id": "fbb127bbb056c959", "capacity": 1, "pro_only": False, "family": "flash"},
-    "gemini-3-flash-thinking": {"id": "5bf011840784117a", "capacity": 1, "pro_only": False, "family": "flash-thinking"},
-    "gemini-3-flash-lite": {"id": "8c46e95b1a07cecc", "capacity": 1, "pro_only": False, "family": "flash-lite"},
-    "gemini-3-pro-plus": {"id": "e6fa609c3fa255c0", "capacity": 4, "pro_only": True, "family": "pro"},
-    "gemini-3-flash-plus": {"id": "56fdd199312815e2", "capacity": 4, "pro_only": True, "family": "flash"},
-    "gemini-3-flash-thinking-plus": {"id": "e051ce1aa80aa576", "capacity": 4, "pro_only": True, "family": "flash-thinking"},
-    "gemini-3-flash-lite-plus": {"id": "8c46e95b1a07cecc", "capacity": 4, "pro_only": True, "family": "flash-lite"},
-    "gemini-3-pro-advanced": {"id": "e6fa609c3fa255c0", "capacity": 2, "pro_only": True, "family": "pro"},
-    "gemini-3-flash-advanced": {"id": "56fdd199312815e2", "capacity": 2, "pro_only": True, "family": "flash"},
-    "gemini-3-flash-thinking-advanced": {"id": "e051ce1aa80aa576", "capacity": 2, "pro_only": True, "family": "flash-thinking"},
-    "gemini-3-flash-lite-advanced": {"id": "8c46e95b1a07cecc", "capacity": 2, "pro_only": True, "family": "flash-lite"},
+    "gemini-3-pro": {"id": "9d8ca3786ebdfbea", "capacity": 1, "pro_only": False, "family": "pro", "model_number": 3},
+    "gemini-3-flash": {"id": "fbb127bbb056c959", "capacity": 1, "pro_only": False, "family": "flash", "model_number": 1},
+    "gemini-3-flash-thinking": {"id": "5bf011840784117a", "capacity": 1, "pro_only": False, "family": "flash-thinking", "model_number": 1},
+    "gemini-3-flash-lite": {"id": "cf41b0e0dd7d53e5", "capacity": 1, "pro_only": False, "family": "flash-lite", "model_number": 6},
+    "gemini-3-pro-plus": {"id": "e6fa609c3fa255c0", "capacity": 4, "pro_only": True, "family": "pro", "model_number": 3},
+    "gemini-3-flash-plus": {"id": "56fdd199312815e2", "capacity": 4, "pro_only": True, "family": "flash", "model_number": 1},
+    "gemini-3-flash-thinking-plus": {"id": "e051ce1aa80aa576", "capacity": 4, "pro_only": True, "family": "flash-thinking", "model_number": 1},
+    "gemini-3-flash-lite-plus": {"id": "8c46e95b1a07cecc", "capacity": 4, "pro_only": True, "family": "flash-lite", "model_number": 6},
+    "gemini-3-pro-advanced": {"id": "e6fa609c3fa255c0", "capacity": 2, "pro_only": True, "family": "pro", "model_number": 3},
+    "gemini-3-flash-advanced": {"id": "56fdd199312815e2", "capacity": 2, "pro_only": True, "family": "flash", "model_number": 1},
+    "gemini-3-flash-thinking-advanced": {"id": "e051ce1aa80aa576", "capacity": 2, "pro_only": True, "family": "flash-thinking", "model_number": 1},
+    "gemini-3-flash-lite-advanced": {"id": "8c46e95b1a07cecc", "capacity": 2, "pro_only": True, "family": "flash-lite", "model_number": 6},
 }
 
 # 对外暴露的稳定模型名（永不变，API 契约）。客户端只认这 4 个，
@@ -116,6 +116,12 @@ def _build_id_alias_map() -> dict[str, str]:
     return {info["id"]: name for name, info in GEMINI_MODELS.items()}
 
 
+def _model_number(model_name: str) -> int:
+    """Resolved model's PR#310 model-type code (pro=3/flash=1/flash-lite=6); default 1."""
+    resolved = _resolve_model(model_name)
+    info = GEMINI_MODELS.get(resolved)
+    return int(info["model_number"]) if info and "model_number" in info else 1
+
 
 def _resolve_model(model_name: str, family_model: dict[str, str] | None = None) -> str:
     """把用户请求的模型名解析为账号当前真实可用的内部模型名。
@@ -167,6 +173,24 @@ def _build_model_header(model_name: str, extended_thinking: bool | None = None) 
     return {
         MODEL_HEADER_KEY: json.dumps(header, separators=(",", ":")),
         "x-goog-ext-525005358-jspb": json.dumps([request_id, 1], separators=(",", ":")),
+        "x-goog-ext-73010989-jspb": "[0]",
+        "x-goog-ext-73010990-jspb": "[0,0,0]",
+    }
+
+
+def _build_model_header_thinking(model_name: str, session_uuid: str) -> dict[str, str]:
+    """PR#310 17-element model header with the extended-thinking flag (=2)."""
+    resolved = _resolve_model(model_name)
+    info = GEMINI_MODELS.get(resolved)
+    if not info:
+        return {}
+    mn = int(info.get("model_number", 1))
+    arr = [1, None, None, None, info["id"], None, None, 0, [4, 5, 6, 8],
+           None, None, info["capacity"], None, None, mn]
+    arr.append(2)               # 2 = extended thinking (1 = standard)
+    arr.append(session_uuid)
+    return {
+        MODEL_HEADER_KEY: json.dumps(arr),
         "x-goog-ext-73010989-jspb": "[0]",
         "x-goog-ext-73010990-jspb": "[0,0,0]",
     }
@@ -280,32 +304,38 @@ def _scan_complete_wrb_frames(buf: str) -> tuple[list, int]:
     return frames, consumed
 
 
-def _extract_text_from_wrb(elem: list) -> tuple[str | None, str]:
-    """从单个 wrb.fr 帧提取 (累积文本, 会话ID)。非文本帧返回 (None, "")。
+def _extract_text_from_wrb(elem: list) -> tuple[str | None, str, str]:
+    """从单个 wrb.fr 帧提取 (累积文本, 会话ID, 思维链)。非文本帧返回 (None, "", "")。
     文本路径 payload[4][0][1][0]；会话ID 用 str(payload[1])，与非流式 _parse_output
     逐字节一致（会话ID 会存进 conversation_store，下轮回传给 _encode_payload 续接会话，
-    流式与非流式必须同格式，否则多轮对话续接会错乱）。
+    流式与非流式必须同格式，否则多轮对话续接会错乱）。思维链路径 payload[4][0][37][0][0]
+    （extended thinking 开启时才有，与 _parse_output 保持一致）。
     """
     try:
         if not isinstance(elem, list) or len(elem) < 3 or elem[0] != "wrb.fr":
-            return None, ""
+            return None, "", ""
         rp = elem[2]
         if not isinstance(rp, str):
-            return None, ""
+            return None, "", ""
         payload = json.loads(rp)
         if not isinstance(payload, list) or len(payload) < 5:
-            return None, ""
+            return None, "", ""
         conv = str(payload[1]) if payload[1] else ""
         text = None
         cands = payload[4]
+        c0 = None
         if isinstance(cands, list) and cands:
             c0 = cands[0]
             if isinstance(c0, list) and len(c0) > 1 and isinstance(c0[1], list) \
                     and c0[1] and isinstance(c0[1][0], str):
                 text = c0[1][0]
-        return text, conv
+        thoughts = ""
+        if isinstance(c0, list) and len(c0) > 37 and isinstance(c0[37], list) and c0[37] \
+                and isinstance(c0[37][0], list) and c0[37][0] and isinstance(c0[37][0][0], str):
+            thoughts = c0[37][0][0]
+        return text, conv, thoughts
     except Exception:
-        return None, ""
+        return None, "", ""
 
 
 MODEL_VALID_PATTERN = re.compile(
@@ -379,6 +409,7 @@ class GeminiWebClient:
                  proxy_url: str | None = None):
         self._psid = psid or settings.gemini_psid
         self._psidts = psidts or settings.gemini_psidts
+        self._session_uuid: str = str(uuid.uuid4()).upper()
         self._session_token: str = ""
         self._push_id: str = ""
         self._available_models: list[str] = []
@@ -1091,8 +1122,44 @@ class GeminiWebClient:
         outer = json.dumps([None, inner])
         return outer
 
+    def _encode_payload_thinking(self, prompt: str, model: str, conversation_id: str = "",
+                                 file_ids: list | None = None, gem_id: str | None = None) -> tuple[str, str]:
+        """PR#310 81-element thinking-path payload encoder (isolated from _encode_payload)."""
+        DEFAULT_METADATA = ["", "", "", None, None, None, None, None, None, ""]
+        if file_ids:
+            file_data = [[[fid], fname] for fid, fname in file_ids]
+            message_content = [prompt, 0, None, file_data, None, None, 0]
+        else:
+            message_content = [prompt, 0, None, None, None, None, 0]
+        mn = _model_number(model)
+        uuid_val = str(uuid.uuid4()).upper()
+        inner: list = [None] * 81
+        inner[0] = message_content
+        inner[1] = ["en"]
+        inner[2] = DEFAULT_METADATA          # conversation continuation not used on thinking path (spec §4.3)
+        inner[6] = [1]
+        inner[7] = 1                          # STREAMING_FLAG_INDEX
+        inner[10] = 1
+        inner[11] = 0
+        inner[17] = [[0]]
+        inner[18] = 0
+        if gem_id:
+            inner[19] = gem_id                # GEM_FLAG_INDEX
+        inner[27] = 1
+        inner[30] = [4]
+        inner[41] = [1]
+        inner[53] = 0
+        inner[59] = uuid_val
+        inner[61] = []
+        inner[68] = 1
+        inner[79] = mn
+        inner[80] = 2                         # 2 = extended thinking
+        outer = json.dumps([None, json.dumps(inner)])
+        return outer, uuid_val
+
     async def generate(self, prompt: str, model: str, conversation_id: str = "",
-                       attachments: list | None = None, gem_id: str | None = None) -> dict:
+                       attachments: list | None = None, gem_id: str | None = None,
+                       extended_thinking: bool = False) -> dict:
         if not self._healthy:
             # 单账号自愈：抛错前单飞重载一次 Cookie，缓解会话约 2h 到期后的硬失败（Issue#1-C）
             async with self._heal_lock:
@@ -1110,6 +1177,7 @@ class GeminiWebClient:
                 f"Model '{model}' unavailable. "
                 f"Options: {', '.join(PUBLIC_MODELS)}"
             )
+        use_extended_thinking = extended_thinking or _is_extended_thinking_model(model)
 
         last_err = None
         request_started = time.perf_counter()
@@ -1121,7 +1189,8 @@ class GeminiWebClient:
         for attempt in range(total_attempts):
             try:
                 result = await self._send_request(
-                    prompt, model, conversation_id, attachments, gem_id, upload_cache
+                    prompt, model, conversation_id, attachments, gem_id,
+                    upload_cache, use_extended_thinking,
                 )
                 upload_duration_ms = upload_cache.get("duration_ms", 0) if upload_cache else 0
                 total_duration_ms = round((time.perf_counter() - request_started) * 1000)
@@ -1158,10 +1227,12 @@ class GeminiWebClient:
         raise RuntimeError(f"Exhausted {total_attempts} attempts: {last_err}")
 
     async def generate_stream(self, prompt: str, model: str, conversation_id: str = "",
-                              attachments: list | None = None, gem_id: str | None = None):
+                              attachments: list | None = None, gem_id: str | None = None,
+                              extended_thinking: bool = False):
         """真流式：用独立临时 AsyncSession 流式读 StreamGenerate，逐帧产出文本增量。
 
         产出事件：
+          {"type": "thoughts", "text": <思考增量>}      —— 流式过程中多次（同帧内先于 delta）
           {"type": "delta", "text": <新增文本>}        —— 流式过程中多次
           {"type": "final", "text": <完整文本>,
            "conversation_id": <会话ID>, "images": [...]}  —— 收尾一次
@@ -1187,6 +1258,7 @@ class GeminiWebClient:
             raise ValueError(
                 f"Model '{model}' unavailable. Options: {', '.join(PUBLIC_MODELS)}"
             )
+        use_extended_thinking = extended_thinking or _is_extended_thinking_model(model)
 
         await apply_jitter("api_call")
         await self._ensure_session_current()
@@ -1200,19 +1272,25 @@ class GeminiWebClient:
             if not file_ids:
                 logger.warning("All attachment uploads failed, streaming text-only")
 
-        encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+        if use_extended_thinking:
+            encoded, uuid_val = self._encode_payload_thinking(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header_thinking(resolved, self._session_uuid)
+        else:
+            encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header(resolved)
         form_data = {"at": self._session_token, "f.req": encoded}
         headers = self._get_headers("POST", content_type="application/x-www-form-urlencoded")
-        model_headers = _build_model_header(
-            resolved, extended_thinking=_is_extended_thinking_model(model)
-        )
         if model_headers:
             headers.update(model_headers)
+        if use_extended_thinking:
+            headers["x-goog-ext-525005358-jspb"] = f'["{uuid_val}",1]'
 
         buf = ""
         emitted = ""             # 已 yield 出去的完整文本（用于和新帧比前缀算增量）
         last_text = ""           # 最新一帧的完整文本
         last_conv = ""
+        last_thoughts = ""       # 累积思维链（最新一帧的完整思考文本，final 兜底用）
+        emitted_thoughts = ""    # 已 yield 出去的思维链前缀（逐帧增量用）
         last_images: list = []
         chunk_timeout = 120      # 单个 chunk 最长等待（兜底 #215 timeout 失效）
 
@@ -1240,9 +1318,17 @@ class GeminiWebClient:
                         if consumed:
                             buf = buf[consumed:]
                         for elem in frames:
-                            text, conv = _extract_text_from_wrb(elem)
+                            text, conv, thoughts = _extract_text_from_wrb(elem)
                             if conv:
                                 last_conv = conv
+                            if thoughts:
+                                last_thoughts = thoughts
+                            if thoughts and len(thoughts) > len(emitted_thoughts) \
+                                    and thoughts.startswith(emitted_thoughts):
+                                t_delta = thoughts[len(emitted_thoughts):]
+                                emitted_thoughts = thoughts
+                                if t_delta:
+                                    yield {"type": "thoughts", "text": t_delta}
                             imgs = self._images_from_wrb(elem)
                             if imgs:
                                 last_images = imgs
@@ -1278,7 +1364,7 @@ class GeminiWebClient:
             except Exception:
                 pass
 
-        yield await self._finalize_stream(last_text, last_conv, last_images)
+        yield await self._finalize_stream(last_text, last_conv, last_images, last_thoughts)
 
     def _images_from_wrb(self, elem: list) -> list:
         """从单个 wrb.fr 帧提取 AI 生成图片（复用 _extract_generated_images）。"""
@@ -1295,8 +1381,11 @@ class GeminiWebClient:
         except Exception:
             return []
 
-    async def _finalize_stream(self, text: str, conv_id: str, images: list) -> dict:
-        """流式收尾：下载/存生成图、过滤占位 URL，组装与 _send_request 一致的 final 结果。"""
+    async def _finalize_stream(self, text: str, conv_id: str, images: list, thoughts: str = "") -> dict:
+        """流式收尾：下载/存生成图、过滤占位 URL，组装与 _send_request 一致的 final 结果。
+        thoughts 增量已由 generate_stream 循环内逐帧 yield（`{"type": "thoughts"}` 事件）；
+        这里的 thoughts 是完整累积思维链，作为收尾兜底一次性带上（防漏发/防中途断连丢失）。
+        """
         result_images: list = []
         if images:
             cookies = self._get_cookies()
@@ -1311,11 +1400,13 @@ class GeminiWebClient:
             "text": text,
             "conversation_id": conv_id,
             "images": result_images,
+            "thoughts": thoughts,
         }
 
     async def _send_request(self, prompt: str, model: str, conversation_id: str = "",
                            attachments: list | None = None, gem_id: str | None = None,
-                           upload_cache: dict | None = None) -> dict:
+                           upload_cache: dict | None = None,
+                           extended_thinking: bool = False) -> dict:
         await apply_jitter("api_call")
         await self._ensure_session_current()
         self._clear_session_cookies()
@@ -1334,15 +1425,19 @@ class GeminiWebClient:
                 raise RuntimeError("All attachment uploads failed")
             self._clear_session_cookies()
 
-        encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+        use_extended_thinking = extended_thinking or _is_extended_thinking_model(model)
+        if use_extended_thinking:
+            encoded, uuid_val = self._encode_payload_thinking(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header_thinking(resolved, self._session_uuid)
+        else:
+            encoded = self._encode_payload(prompt, resolved, conversation_id, file_ids, gem_id)
+            model_headers = _build_model_header(resolved)
         form_data = {"at": self._session_token, "f.req": encoded}
         headers = self._get_headers("POST", content_type="application/x-www-form-urlencoded")
-
-        model_headers = _build_model_header(
-            resolved, extended_thinking=_is_extended_thinking_model(model)
-        )
         if model_headers:
             headers.update(model_headers)
+        if use_extended_thinking:
+            headers["x-goog-ext-525005358-jspb"] = f'["{uuid_val}",1]'
 
         gen_timeout = (
             _GENERATE_TIMEOUT_IMAGE if maybe_image_generation_intent(prompt)
@@ -1438,6 +1533,7 @@ class GeminiWebClient:
     def _parse_output(self, raw: str) -> dict:
         lines = raw.strip().split("\n")
         text_content = ""
+        thoughts_content = ""
         conv_id = ""
         images: list[dict] = []
 
@@ -1473,6 +1569,10 @@ class GeminiWebClient:
                     parts = candidate[1]
                     if isinstance(parts, list) and parts and isinstance(parts[0], str):
                         text_content = parts[0]
+                    if len(candidate) > 37 and isinstance(candidate[37], list) and candidate[37] \
+                            and isinstance(candidate[37][0], list) and candidate[37][0] \
+                            and isinstance(candidate[37][0][0], str):
+                        thoughts_content = candidate[37][0][0]
                 # AI 生成图片：candidate[12][7][0] 是图片数组（实测确认）
                 imgs = self._extract_generated_images(candidate)
                 if imgs:
@@ -1490,7 +1590,7 @@ class GeminiWebClient:
             if had_placeholder and not text_content and not images:
                 text_content = "（没有生成图片。试试更明确的生成指令，如「画一张…」「生成一张…的图片」。）"
 
-        return {"text": text_content, "conversation_id": conv_id, "images": images}
+        return {"text": text_content, "conversation_id": conv_id, "images": images, "thoughts": thoughts_content}
 
     @staticmethod
     def _extract_generated_images(candidate: list) -> list[dict]:

@@ -49,6 +49,7 @@ EDITABLE_FIELDS = {
     "chat_cleanup_keep_hours",
     "chat_cleanup_interval_hours",
     "chat_cleanup_skip_pinned",
+    "extended_thinking_enabled",
 }
 
 # Type mapping for validation
@@ -71,6 +72,7 @@ FIELD_TYPES = {
     "chat_cleanup_keep_hours": float,
     "chat_cleanup_interval_hours": float,
     "chat_cleanup_skip_pinned": bool,
+    "extended_thinking_enabled": bool,
 }
 
 
@@ -128,6 +130,7 @@ def _get_grouped_settings() -> Dict[str, Dict[str, Any]]:
             "chat_cleanup_keep_hours": settings.chat_cleanup_keep_hours,
             "chat_cleanup_interval_hours": settings.chat_cleanup_interval_hours,
             "chat_cleanup_skip_pinned": settings.chat_cleanup_skip_pinned,
+            "extended_thinking_enabled": settings.extended_thinking_enabled,
         },
     }
 

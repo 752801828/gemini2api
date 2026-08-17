@@ -8,7 +8,7 @@ from pydantic import field_validator
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.6.28"
+APP_VERSION = "1.6.32"
 
 
 def _generate_api_key() -> str:
@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     chat_cleanup_keep_hours: float = 24.0
     chat_cleanup_interval_hours: float = 6.0
     chat_cleanup_skip_pinned: bool = True
+    # 原生 Gemini 扩展思考（reasoning_effort 触发）。默认开、可一键关；关闭后 reasoning_effort 对原生 Gemini 无效、走普通格式。
+    extended_thinking_enabled: bool = True
     # 管理面板/admin 路由的独立访问密钥。默认空 → 回退到 api_key（保持单 key 全功能的原行为，零回归）。
     # 设置非空后，/admin/* 改用该 key 校验，业务 API 仍用 api_key，实现权限分离。
     admin_api_key: str = ""

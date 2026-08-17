@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="../logo.png" width="128" height="128" alt="Gemini2API">
+
 <h1>Gemini2API</h1>
 <h3>輕量級 Gemini Web 反向代理</h3>
 <p>一套程式碼相容 OpenAI / Claude / Gemini 三大主流 AI SDK，純非同步架構，零官方 Key，Docker 快速部署。</p>
@@ -11,7 +13,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.28-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.32-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -55,40 +57,20 @@
 
 ## 📝 最近更新
 
-> 完整更新日誌請查看 [CHANGELOG.md](../../CHANGELOG.md)，以下內容由 CI 自動同步。
+> 僅列出最近 10 條更新，完整更新日誌請查看 [CHANGELOG.md](../../CHANGELOG.md)。
 
 | 日期 | 更新內容 |
 |------|----------|
+| 2026-08-14 22:50:00 | v1.6.32 - 🧠 思考內容逐幀串流：原生 Gemini 的思考過程在生成階段就作為 reasoning_content 逐幀增量流出（/v1/chat/completions），思考先於答案顯示、帶打字機效果，修復面板「答案早於思考」；收尾仍帶完整思考兜底，不開思考/一般對話零回歸 |
+| 2026-08-14 22:40:00 | v1.6.31 - 🌊 修復串流連線偶發中斷：為全部四條串流介面（/v1/chat/completions、/v1/responses、/v1/messages、native Gemini streamGenerateContent）在等待模型生成的靜默期補發保活心跳，避免長回應被跨境/閘道閒置逾時掐斷；並修正面板誤導的網路錯誤提示 |
+| 2026-08-14 22:30:00 | v1.6.30 - 🧠 模型測試面板新增「思考」開關：勾選後對 Gemini 開啟擴展思考，思考過程以可折疊塊顯示在答案上方 |
+| 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 擴展思考：`reasoning_effort` 開啟，思考過程作為 reasoning_content 返回；預設開可一鍵關、失敗自動退回，不影響普通聊天；並修正 flash-lite 免費檔 ID |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最輕量的 Flash-Lite 檔（3.5 Flash-Lite），在 Pro/Flash 被限額時仍有可用模型可選（內部按帳號真實模型動態映射，沿用固定公開名） |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 與 Favicon：左上角圖示更換為自訂品牌 Logo 圖片（並壓縮至 128×128、約 16KB，較原圖縮小約 97%）；管理面板與登入頁新增瀏覽器分頁圖示（Favicon，使用同一 Logo） |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 新增 OpenAI Responses API 支援（`/v1/responses` 或 `/openai/v1/responses`）：讓需要新版 Responses 協議的客戶端（如 2026 年 2 月起砍掉 Chat Completions 支援的 Codex CLI）能正常接入 gemini2api——支援文字對話、串流輸出、工具呼叫，Gemini 模型和 API 管理設定的第三方模型均可使用；串流事件嚴格遵循官方協議順序（修正了參考實現已知會漏發的兩個關鍵事件：`response.output_text.done` / `response.function_call_arguments.done`）；不支援伺服器端多輪狀態（`previous_response_id` 會明確報錯而非假裝續上），因為 Codex CLI 本身會重發完整對話歷史 |
 | 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 管理頁 Gemini 兜底一鍵開關：即時開/關「Gemini→第三方兜底」並持久化（原本只能改 .env 且需重啟）；開關只控制兜底，第三方模型照常直連呼叫、照常在 /v1/models |
 | 2026-06-22 20:06:08 | v1.6.24 - 🧩 自訂 Gem 支援：管理面板新增「Gem 管理」頁，可列出/新建/修改/刪除帳號下你自己建立的自訂 Gem，並把任意 Gem「暴露為模型名」——任何 OpenAI 相容客戶端用該模型名呼叫即以該 Gem 人設對話；Gem 綁定所屬帳號、呼叫只走綁定帳號不輪詢；刪 Gem 時自動清除對應模型映射 |
 | 2026-06-22 14:21:48 | v1.6.23 - 🧠 第三方「每模型思考(reasoning_effort)」設定：API 管理裡可為每條第三方模型設定思考等級（預設不設/none/low/medium/high/自訂），轉發時自動注入——OpenAI 相容上游注入 reasoning_effort，Anthropic 上游換算成 thinking(budget_tokens) 並把回應思考映射回 reasoning_content；預設不設時零回歸，不支援思考的模型留預設即可；同時修復「僅回傳思考內容(正文暫空)被誤判為空回應」的問題 |
-| 2026-06-22 11:29:42 | v1.6.22 - 🔁 第三方直連「同名多家」自動故障切換：同一模型 ID 配置多家第三方時，固定優先第一家，遇報錯/限流/額度耗盡/逾時/空回應即自動切下一家同名第三方，全部失敗才回傳最後錯誤，客戶端只用一個模型名無感；串流在首位元組前無縫換家，壞家記憶體冷卻（`THIRDPARTY_FAILOVER_COOLDOWN` 預設 180 秒）、冷卻期優先跳過到期自動恢復，全部冷卻或僅一家仍照常嘗試絕不餓死；預設生效無開關、單家零回歸，不影響 Gemini→第三方兜底鏈 |
-| 2026-06-21 00:33:02 | v1.6.21 - 🔀 Gemini→第三方自動兜底鏈：任意 Gemini 模型（flash/pro/thinking）報錯或回傳空回應時，自動改用 API Key 池中的第三方模型原生重試，客戶端無感、仍只用一個模型名；候選自動取池中第三方、按名排除 image/video/audio/embedding 等非聊天模型、隨機輪詢、一個失敗（報錯/空）就換下一個，統一非流式探測（報錯/空都不誤當成功）、流式轉 SSE 含原生工具呼叫；`FALLBACK_ENABLED` 預設關、`FALLBACK_MODELS` 可選精確指定，零回歸 |
-| 2026-06-19 22:40:00 | v1.6.20 - 🐳 修復 v1.6.19 非 root 鏡像的升級回歸：既有部署因 ./data 屬主非容器使用者，`docker compose pull` 後非 root 程序寫入觸發 PermissionError → 啟動崩潰迴圈。改為入口腳本以 root 啟動→修復 data/api 卷屬主→gosu 降權到非 root（uid 1000）執行，既保持非 root 強化又讓 `docker compose pull && up -d` 無縫升級，無需手動 chown |
-| 2026-06-19 22:00:00 | v1.6.19 - 🔒 安全與品質強化批次：修復 6 處管理面板 XSS、2 處 SSRF（附件重新導向繞過/轉發 base_url 未校驗）、設定寫壞 .env 的永久 DoS、conversation_id 路徑穿越；🔧 串流生圖佔位 URL 洩漏/轉發 SSE 缺分隔符與 [DONE]、usage-stats 關閉時 500、accounts.json 原子寫、帳號 ID 衝突等多項；⚙️ 讓 MODEL_WHITELIST/JITTER_ENABLED/VERSION_SYNC_INTERVAL 等設定真正生效；📄 文件/設定全面對齊 + 新增漂移測試；🐳 鏡像非 root + CI 關卡可失敗。全程零回歸（63 測試 + ruff + 對抗複核通過）|
-| 2026-06-19 14:15:00 | v1.6.18 - 🔧 修復 gemini-pro 生圖 network error：生圖 POST 超時 60s→180s；SSE keepalive 10s + 切片 ping。零回歸（62 測試通過）|
-| 2026-06-19 13:30:00 | v1.6.17 - 🔧 修復 playground 生圖 network error：SSE 首幀 + 15s 心跳保活；圖片下載 =s2048/25s/=s512 降級/失敗占位。🎨 生圖等待態 UX + 5 語 i18n。零回歸（52 測試通過）|
-| 2026-06-19 03:01:44 | v1.6.16 - 🔧 穩定性與安全強化：修復深度研究介面必崩、第三方串流轉發失效、帳號槽位洩漏死鎖、多帳號模型解析串擾、間歇 "Client not ready"、限流設定未生效；🔒 安全加固：管理權限分離（可選 `ADMIN_API_KEY`）、API Key 日誌脫敏、雙 SSRF 防護、金鑰匯出/PSID 脫敏、憑證檔案原子寫、CORS 可配、恆定時間比較；🧪 新增自動化測試 + CI 關卡、面板無障礙/多語言增強。全程零回歸（58 測試通過）|
-| 2026-06-06 19:29:01 | v1.6.15 - 🧹 自動清理 Gemini 網頁端堆積會話：API 每次對話都會在網頁端留記錄，長期堆積大量歷史。現在後台定時（預設每6小時）刪除超過保留視窗（預設24小時）的舊會話，置頂會話永不刪；循環清理解決重度帳號堆積數百會話清不完的問題；保留視窗遠大於反代上下文視窗（6h），正在續接的多輪對話不會被誤刪；設定面板新增「網頁會話清理」分組 |
-| 2026-06-02 20:16:19 | v1.6.14 - 🖼️ 生圖意圖識別補充意願動詞：「我想要一張…的圖」「要一張圖」「我需要一張海報」等用想要/要/需要表達的生圖請求現在能正確識別、圖片排在前面（之前會圖在文字後或出現 http 殘片）；仍要求圖像名詞+動詞同現，不誤判日常用語 |
-| 2026-06-02 18:51:41 | v1.6.13 - 🖼️ 生圖回覆改為圖片在前+緊湊排版（不再是大段文字+空行+圖片）；生圖意圖識別大幅增強（畫/生成/設計/做/來張…圖、海報/logo/poster 等口語化請求都能正確生圖並圖片在前）；過濾 image_retrieval/image_collection 檢索佔位 URL，無有效圖時給友善提示而非空內容 |
-| 2026-06-02 16:37:57 | v1.6.12 - 🛠️ 修復 agent（如 Hermes）帶 tools 時生圖被壓制、工具呼叫畸形 JSON 透傳：偵測到生圖意圖自動跳過工具模擬直接出圖；工具呼叫多層容錯解析（剝離 markdown/提取 JSON/容忍畸形），畸形不再透傳；Gemini 原生介面工具呼叫正確回傳 functionCall |
-| 2026-06-02 13:04:39 | v1.6.11 - 🔁 503 智慧 failover：Google 對資料中心 IP 間歇性 503 限流時，多帳號自動切換到下一個可用帳號重試（一個被限流立刻換號），被限流帳號進入 30s 冷卻但不標記失效；單帳號 5xx 只快速重試不長退避空耗 |
-| 2026-06-01 20:21:43 | v1.6.10 - ⚡ 真串流輸出：三家介面改為真正的增量串流（首字一生成就推送，不再等整段生成完才假裝逐字吐），聊天體感大幅提升；🚀 並行大幅提升：單帳號並行 3→8，且滿載時排隊等待而非直接報錯 No available accounts，agent 不再一並行就失敗 |
-| 2026-06-01 00:32:16 | v1.6.9 - 🖼️ 生成圖片回傳全解析度原圖：之前下載的是壓縮縮圖（512px），現加 =s0 後綴取原始尺寸（如 1408×768） |
-| 2026-06-01 00:18:01 | v1.6.8 - 🖼️ 生圖不再回傳 googleusercontent 佔位網址：該佔位 URL 無實際意義，已從回覆中過濾，生圖只回傳圖片本身 |
-| 2026-06-01 00:02:09 | v1.6.7 - 🖼️ 修復控制面板模型測試不顯示圖片：生成的圖片現在直接渲染顯示，不再顯示成 markdown 文字/URL |
-| 2026-05-31 23:41:15 | v1.6.6 - 🖼️ 生成圖片本機託管：對話介面的生圖結果改為回傳可存取的本機 URL（/images/{id}），讓 CLI/agent 用戶端也能正常渲染顯示（base64 在這類用戶端無法顯示）；圖片定期自動清理 |
-| 2026-05-31 22:36:53 | v1.6.5 - 🎨 AI 生成圖片：新增 OpenAI 相容 /v1/images/generations 介面（回傳 b64_json）；三家對話介面偵測到生成圖片自動嵌入回覆（markdown / image block / inlineData） |
-| 2026-05-31 17:00:00 | v1.6.4 - 三家介面暴露標準裸路徑（/v1/chat/completions、/v1/messages、/v1beta/...），主流 SDK 開箱即用；修復部署機制（docker-compose 由 build 改 image，docker compose pull 真正生效） |
-| 2026-05-31 14:10:00 | v1.6.3 - 圖片/檔案上傳支援（OpenAI/Claude/Gemini 多模態）；模型改用網頁版真實資料 + 對外固定穩定名（gemini-pro/flash/flash-thinking）；重啟不再遺失 Cookie |
-| 2026-05-19 20:00:00 | v1.6.2 - 工作階段 5 分鐘無操作自動過期登出 |
-| 2026-05-18 16:30:00 | v1.6.1 - 深色主題全面修復、檢查更新彈窗美化、GitHub Actions 自動建置映像、failover 故障轉移策略 |
-| 2026-05-17 23:20:00 | 模型列表統一為使用者友善名稱，新增思考模式（gemini-2.5-flash-thinking）和 Pro 模式，Playground 對話上下文修復 |
-| 2026-05-17 22:30:00 | 容器時區修正為 Asia/Shanghai，日誌顯示北京時間 |
 
 ---
 
@@ -547,6 +529,7 @@ response = client.chat.completions.create(
 - [ ] 圖片/檔案上傳支援
 - [x] 自動清理網頁端堆積會話（定時刪除舊會話，置頂保留）
 - [x] [issues #2](https://github.com/xwteam/gemini2api/issues/2) 自訂 Gemini Gem 支援（管理面板列出/新建/修改/刪除 + 暴露為模型名呼叫）
+- [x] [issues #6](https://github.com/xwteam/gemini2api/issues/6) [#7](https://github.com/xwteam/gemini2api/issues/7) 原生 Gemini 擴展思考支援（`reasoning_effort` 開啟，思考過程逐幀串流、先於答案顯示 + 模型測試面板「思考」開關 + 一鍵關不影響一般聊天）
 - [x] API 管理頁 Gemini 兜底一鍵開關（即時開/關兜底鏈並持久化，無需改 .env 重啟）
 
 ---

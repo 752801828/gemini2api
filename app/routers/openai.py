@@ -14,7 +14,7 @@ from app.core.api_forwarder import forward_to_provider, open_stream
 from app.core.fallback import fallback_enabled, is_empty_result, get_fallback_entries, openai_data_is_empty
 from app.core.conversation_store import conversation_store
 from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model
-from app.core.stream import split_into_chunks, format_sse
+from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME
 from app.models.openai import (
     ChatRequest, ChatResponse, Choice, ChoiceMessage,
     StreamChunk, StreamChoice, StreamDelta,
@@ -63,7 +63,7 @@ def _images_md_from_base(images: list, base: str) -> str:
     return "\n".join(lines)
 
 
-_SSE_KEEPALIVE_INTERVAL = 10.0  # 刷新前置代理 idle/read 计时器（pro 生图链路更长，缩短间隔）
+_SSE_KEEPALIVE_INTERVAL = SSE_KEEPALIVE_INTERVAL  # 单一来源见 app/core/stream.py
 
 
 async def _sse_keepalive_during(task: asyncio.Task, interval: float = _SSE_KEEPALIVE_INTERVAL):
@@ -322,43 +322,62 @@ async def chat_completions(req: ChatRequest, request: Request):
     # 提取图片/文件附件（多模态），纯文本时为空列表
     attachments = extract_attachments(messages_raw)
 
+    # reasoning_effort（非空）+ 全局开关 → 走扩展思维链路径
+    _eff = (req.reasoning_effort or "").strip()
+    extended_thinking = bool(_eff) and settings.extended_thinking_enabled
+
     if req.stream:
         return StreamingResponse(
-            _stream_response(prompt, resolved_model, has_tools, gemini_conv_id, conv, messages_raw, req.model, attachments, _image_base(request), request, req, gem_id, gem_account_id),
+            _stream_response(prompt, resolved_model, has_tools, gemini_conv_id, conv, messages_raw, req.model, attachments, _image_base(request), request, req, gem_id, gem_account_id, extended_thinking=extended_thinking),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     try:
         result = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
-                                              gem_id=gem_id, account_id=gem_account_id)
+                                              gem_id=gem_id, account_id=gem_account_id,
+                                              extended_thinking=extended_thinking)
     except (RuntimeError, ValueError) as e:
-        # Fallback: 如果 conversation_id 过期，用完整 prompt 重试
-        if gemini_conv_id:
-            prompt = build_prompt_from_messages(messages_raw)
-            if has_tools:
-                tools_raw = [t.model_dump() for t in req.tools]
-                prompt = build_tool_prompt(prompt, tools_raw, req.tool_choice)
+        err = e
+        result = None
+        # 扩展思维链路径失败：先原样退回非思维链重试一次，再走既有兜底（会话过期/第三方）
+        if extended_thinking:
+            logger.warning(f"extended-thinking request failed, retrying normal: {e}")
             try:
-                result = await gemini_client.generate(prompt, resolved_model,
-                                                       gem_id=gem_id, account_id=gem_account_id)
-                gemini_conv_id = ""
-            except Exception:
+                result = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
+                                                      gem_id=gem_id, account_id=gem_account_id,
+                                                      extended_thinking=False)
+            except (RuntimeError, ValueError) as e2:
+                err = e2
+
+        if result is None:
+            # Fallback: 如果 conversation_id 过期，用完整 prompt 重试
+            if gemini_conv_id:
+                prompt = build_prompt_from_messages(messages_raw)
+                if has_tools:
+                    tools_raw = [t.model_dump() for t in req.tools]
+                    prompt = build_tool_prompt(prompt, tools_raw, req.tool_choice)
+                try:
+                    result = await gemini_client.generate(prompt, resolved_model,
+                                                           gem_id=gem_id, account_id=gem_account_id,
+                                                           extended_thinking=False)
+                    gemini_conv_id = ""
+                except Exception:
+                    fb = await _fallback_result(request, req, messages_raw, resolved_model)
+                    if fb is not None:
+                        return JSONResponse(content=fb)
+                    return JSONResponse(
+                        status_code=500,
+                        content={"error": {"message": str(err), "type": "api_error"}},
+                    )
+            else:
                 fb = await _fallback_result(request, req, messages_raw, resolved_model)
                 if fb is not None:
                     return JSONResponse(content=fb)
                 return JSONResponse(
-                    status_code=500,
-                    content={"error": {"message": str(e), "type": "api_error"}},
+                    status_code=500 if "retry" in str(err).lower() else 400,
+                    content={"error": {"message": str(err), "type": "api_error"}},
                 )
-        else:
-            fb = await _fallback_result(request, req, messages_raw, resolved_model)
-            if fb is not None:
-                return JSONResponse(content=fb)
-            return JSONResponse(
-                status_code=500 if "retry" in str(e).lower() else 400,
-                content={"error": {"message": str(e), "type": "api_error"}},
-            )
 
     # Gemini 返回空响应（无文本、无图）→ 第三方兜底（开关关闭/无候选时返回 None，零回归）
     if is_empty_result(result):
@@ -422,7 +441,8 @@ async def chat_completions(req: ChatRequest, request: Request):
         id=completion_id,
         model=req.model,
         choices=[Choice(
-            message=ChoiceMessage(role="assistant", content=text),
+            message=ChoiceMessage(role="assistant", content=text,
+                                  reasoning_content=(result.get("thoughts") or None)),
             finish_reason="stop",
         )],
         usage=UsageInfo(
@@ -434,7 +454,7 @@ async def chat_completions(req: ChatRequest, request: Request):
     )
 
 
-async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv_id: str = "", conv=None, messages_raw=None, display_model: str = "", attachments=None, base_url: str = "", request=None, req=None, gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
+async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv_id: str = "", conv=None, messages_raw=None, display_model: str = "", attachments=None, base_url: str = "", request=None, req=None, gem_id=None, account_id=None, extended_thinking: bool = False) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     model_name = display_model or model
 
@@ -460,9 +480,15 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
     new_conv_id = ""
     final_images = []
     streamed_any = False
+    emitted_thoughts = ""  # 已发出的思维链前缀，用于跟已知累积 thoughts 做前缀 diff 只发增量
     try:
-        async for evt in gemini_client.generate_stream(prompt, model, gemini_conv_id, attachments,
-                                                        gem_id=gem_id, account_id=account_id):
+        async for _kind, evt in iter_with_keepalive(
+            gemini_client.generate_stream(prompt, model, gemini_conv_id, attachments,
+                                          gem_id=gem_id, account_id=account_id,
+                                          extended_thinking=extended_thinking)):
+            if _kind == "ping":
+                yield SSE_KEEPALIVE_FRAME
+                continue
             if evt.get("type") == "delta":
                 # generate_stream 现在是严格 append-only（不再发 _replace），delta 总是新增尾部
                 delta = evt.get("text", "")
@@ -474,7 +500,30 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                         choices=[StreamChoice(delta=StreamDelta(content=delta))],
                     )
                     yield format_sse(chunk.model_dump())
+            elif evt.get("type") == "thoughts":
+                t_delta = evt.get("text", "")
+                if t_delta:
+                    emitted_thoughts += t_delta
+                    chunk = StreamChunk(
+                        id=completion_id, model=model_name,
+                        choices=[StreamChoice(delta=StreamDelta(reasoning_content=t_delta))],
+                    )
+                    yield format_sse(chunk.model_dump())
             elif evt.get("type") == "final":
+                # 思维链目前只在 final 帧一次性拿到完整累积 thoughts（底层暂不逐帧增量），
+                # 这里仍按「已发出前缀 diff」的方式只发新增部分，为未来逐帧增量留好口子；
+                # 在文本尾部补发之前先发，保证客户端先看到 reasoning 再看到最终回答。
+                final_thoughts = evt.get("thoughts", "") or ""
+                if final_thoughts != emitted_thoughts and final_thoughts.startswith(emitted_thoughts):
+                    thoughts_delta = final_thoughts[len(emitted_thoughts):]
+                    emitted_thoughts = final_thoughts
+                    if thoughts_delta:
+                        chunk = StreamChunk(
+                            id=completion_id, model=model_name,
+                            choices=[StreamChoice(delta=StreamDelta(reasoning_content=thoughts_delta))],
+                        )
+                        yield format_sse(chunk.model_dump())
+                # else: divergent/shrunk final thoughts — reasoning already streamed; do NOT re-emit whole (avoid duplicate)
                 # final.text 是过滤完占位串的完整文本，可能比已流出的 full_text 多出
                 # （流式时被 hold 住的尾部）。补发缺失尾部，保证客户端拿到完整内容。
                 final_text = evt.get("text", full_text)
@@ -497,7 +546,8 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
             try:
                 retry_prompt = build_prompt_from_messages(messages_raw)
                 result = await gemini_client.generate(retry_prompt, model, "", attachments,
-                                                      gem_id=gem_id, account_id=account_id)
+                                                      gem_id=gem_id, account_id=account_id,
+                                                      extended_thinking=False)
                 full_text = result.get("text", "")
                 new_conv_id = result.get("conversation_id", "")
                 final_images = result.get("images") or []
