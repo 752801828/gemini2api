@@ -105,7 +105,12 @@ class AccountPool:
 
     @property
     def active_count(self) -> int:
-        return sum(1 for a in self._accounts if a.status == AccountStatus.ACTIVE)
+        return sum(
+            1 for a in self._accounts
+            if a.status == AccountStatus.ACTIVE
+            and a.client is not None
+            and a.client.is_healthy
+        )
 
     @property
     def total_count(self) -> int:
@@ -262,15 +267,21 @@ class AccountPool:
     async def _try_recover_expired(self):
         """无可用账号时，尝试恢复 EXPIRED 账号（已持有锁）。"""
         for a in self._accounts:
-            if a.status == AccountStatus.EXPIRED and a.client:
+            if (
+                a.client
+                and a.status in {AccountStatus.ACTIVE, AccountStatus.EXPIRED}
+                and (a.status == AccountStatus.EXPIRED or not a.client.is_healthy)
+            ):
                 try:
                     result = await a.client.check_account()
                     if result.get("valid"):
                         a.status = AccountStatus.ACTIVE
                         a.consecutive_failures = 0
                         logger.info(f"Account {a.id} recovered during acquire")
+                    else:
+                        a.status = AccountStatus.EXPIRED
                 except Exception:
-                    pass
+                    a.status = AccountStatus.EXPIRED
 
     async def acquire(self, exclude: set | None = None, preferred_id: str | None = None) -> Account:
         loop = asyncio.get_event_loop()
@@ -292,7 +303,12 @@ class AccountPool:
                 #   ① 有 ACTIVE 账号但都满载 → 排队等 release 唤醒（不要跑网络恢复，
                 #      否则高并发满载时每次唤醒都串行跑 check_account 把整个池卡死）
                 #   ② 完全没有 ACTIVE 账号 → 才尝试救活 EXPIRED（网络 I/O，低频路径）
-                has_active = any(a.status == AccountStatus.ACTIVE for a in self._accounts)
+                has_active = any(
+                    a.status == AccountStatus.ACTIVE
+                    and a.client is not None
+                    and a.client.is_healthy
+                    for a in self._accounts
+                )
                 if not has_active:
                     await self._try_recover_expired()
                     account = self._find_available(preferred_id=preferred_id)
@@ -501,14 +517,20 @@ class AccountPool:
         return {"success": False, "profile_id": account.id, "error": error[:300], "notification": notification}
 
     async def _apply_account_cookies(self, account: Account, psid: str, psidts: str) -> dict:
-        result = await account.client.reload_cookies(psid, psidts)
-        if not result.get("success"):
-            raise RuntimeError(result.get("error", "Cookies were rejected"))
+        try:
+            result = await account.client.reload_cookies(psid, psidts)
+            if not result.get("success"):
+                raise RuntimeError(result.get("error", "Cookies were rejected"))
+        except Exception as error:
+            account.status = AccountStatus.EXPIRED
+            account.last_error = str(error)[:300]
+            raise
         current_psid, current_psidts = account.client.cookie_credentials
         account.psid = current_psid or psid
         account.psidts = current_psidts or psidts
         account.status = AccountStatus.ACTIVE
         account.consecutive_failures = 0
+        account.last_error = ""
         account.cookie_updated_at = datetime.now(timezone.utc).isoformat()
         self._save_to_file()
         return result
@@ -739,11 +761,18 @@ class AccountPool:
     def get_status(self, include_credentials: bool = False) -> dict:
         accounts_info = []
         for a in self._accounts:
+            client_healthy = bool(a.client and a.client.is_healthy)
+            effective_status = (
+                AccountStatus.EXPIRED
+                if a.status == AccountStatus.ACTIVE and not client_healthy
+                else a.status
+            )
             info = {
                 "id": a.id,
                 "label": a.label,
                 "psid": a.psid,
-                "status": a.status.value,
+                "status": effective_status.value,
+                "healthy": client_healthy,
                 "request_count": a.request_count,
                 "error_count": a.error_count,
                 "active_requests": a.active_requests,
