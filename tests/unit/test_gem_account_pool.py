@@ -475,3 +475,14 @@ def test_component_loader_retries_transient_server_errors_once():
     assert "attempt < 2" in loader
     assert "response.status < 500" in loader
     assert "cache: attempt ? 'no-store' : 'default'" in loader
+
+
+def test_playground_thinking_toggle_uses_fresh_component_cache_key():
+    root = Path(__file__).resolve().parents[2]
+    index = (root / "static" / "index.html").read_text(encoding="utf-8")
+    loader = (root / "static" / "app" / "component-loader.js").read_text(encoding="utf-8")
+    playground = (root / "static" / "components" / "section-playground.html").read_text(encoding="utf-8")
+
+    assert "component-loader.js?v=32" in index
+    assert "const version = '?v=32'" in loader
+    assert 'id="pg-thinking"' in playground
