@@ -65,6 +65,7 @@ flowchart LR
 - Gemini 原生：`generateContent`、`streamGenerateContent`、`inlineData`、`fileData`。
 - Deep Research：发起、流式和交互式研究任务。
 - 标准裸路径与带协议前缀路径同时可用。
+- 四条流式接口在上游静默期发送协议兼容的保活帧，降低代理或跨境链路因空闲超时而中断的概率。
 
 ### 4.2 模型与 Gem
 
@@ -74,6 +75,7 @@ flowchart LR
 - 支持 Gemini 自定义 Gem 的查询、新建、修改、删除。
 - 可把 Gem 映射为对外模型名，并固定使用 Gem 所属账号。
 - 支持网页端扩展思考/扩展模式的模型路由。
+- OpenAI Chat/Responses 可通过 `reasoning_effort` 开启扩展思考；流式 Chat 会先逐帧返回思考增量，再返回答案增量，管理台模型测试提供对应开关。
 
 ### 4.3 多账号池与请求失败策略
 
@@ -207,6 +209,14 @@ docker compose ps
 docker compose logs --tail=100 gemini2api
 ```
 
+### 7.4 上游同步
+
+- 官方源仓库固定为 `https://github.com/xwteam/gemini2api.git`，本仓库的定制功能继续保存在 `main`。
+- `.github/workflows/upstream-sync.yml` 每周一自动检查，也支持在 Actions 页面手动运行。
+- 检测到更新时只重建 `sync/upstream-main` 并创建或更新草稿 PR；不会自动合并 `main`，也不会自动部署服务机。
+- 合并冲突会使工作流安全失败，必须在独立集成分支中解决并完整验证 Flow bridge、盘巡、账号固定代理、失败重试和 API 日志。
+- GitHub 仓库 Actions 设置需要允许工作流创建 Pull Request；若该权限关闭，同步分支仍会推送，但 PR 创建步骤会失败并留下明确记录。
+
 ## 8. 关键安全与一致性约束
 
 1. Flow 同步账号的 CK 获取和 Gemini 请求必须使用同一固定代理路由。
@@ -235,7 +245,7 @@ docker compose logs --tail=100 gemini2api
 
 ## 10. 测试基线
 
-2026-08-12 基线：`241 passed, 1 xfailed`。已知 xfail 为生图意图短语边界误判，不影响实时日志或 Flow 代理一致性。
+2026-08-17 上游 1.6.32 集成基线：`287 passed, 1 xfailed`。已知 xfail 为生图意图短语边界误判，不影响实时日志或 Flow 代理一致性。
 
 每次修改至少运行与变更相关的测试；涉及账号池、桥接、代理、请求链路或数据结构时应运行完整测试集。
 
@@ -243,6 +253,8 @@ docker compose logs --tail=100 gemini2api
 
 ### 2026-08-17
 
+- 合并官方 `1.6.29` 至 `1.6.32`：新增 `reasoning_effort` 扩展思考、模型测试思考开关、四类流式接口静默期保活和 Chat 思考内容逐帧增量；保留现有最多 3 个账号切换、流开始前同账号快速重试、Flow 代理绑定、附件上传缓存及耗时统计。对外普通请求兼容；部署需要重建 Gemini2API 容器并强制刷新管理页面。
+- 新增安全的官方上游同步工作流：每周或手动把官方 `main` 合并到专用同步分支并创建草稿 PR，不自动合并或部署；冲突时安全失败。仓库需允许 GitHub Actions 创建 Pull Request。
 - 修复账号客户端已不健康但状态仍为 `active` 时被误判为“全部繁忙”的问题：活跃计数、账号池等待判断和管理状态现在都要求客户端真实健康；Cookie 热更新失败会立即标记对应账号过期。盘巡和业务 API 不再为不可用账号等待 60 秒，而是立即进入恢复/切号或返回明确的无可用账号错误。部署需重建 Gemini2API 容器；新增账号健康状态回归测试。
 
 - 管理页面组件遇到瞬时 HTTP 5xx 时等待 300ms 并绕过缓存重试一次，避免单个 `sidebar.html` 等静态片段短暂失败后整页显示“加载失败”。4xx 和连续失败仍立即显示原有错误页。

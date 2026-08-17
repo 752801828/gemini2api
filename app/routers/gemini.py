@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
-from app.core.stream import split_into_chunks
+from app.core.stream import split_into_chunks, iter_with_keepalive
 from app.models.gemini import (
     GeminiRequest,
     GeminiResponse,
@@ -271,8 +271,13 @@ async def stream_generate_content(model: str, req: GeminiRequest, request: Reque
         else:
             # === 真流式路径（纯文本）===
             try:
-                async for evt in gemini_client.generate_stream(prompt, model, "", attachments,
-                                                                gem_id=gem_id, account_id=gem_account_id):
+                async for _kind, evt in iter_with_keepalive(
+                    gemini_client.generate_stream(prompt, model, "", attachments,
+                                                  gem_id=gem_id, account_id=gem_account_id)):
+                    if _kind == "ping":
+                        # NDJSON blank-line keepalive (SSE ": ping" comment is invalid on this application/json stream)
+                        yield "\n"
+                        continue
                     if evt.get("type") == "delta":
                         # generate_stream 现在是严格 append-only（不再发 _replace），delta 总是新增尾部
                         delta = evt.get("text", "")

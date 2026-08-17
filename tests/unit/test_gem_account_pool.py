@@ -27,11 +27,13 @@ class _FakeClient:
         self.calls.append(("delete_gem", gem_id))
         return True
 
-    async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None):
+    async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                       extended_thinking=False):
         self.calls.append(("generate", prompt, model, gem_id))
         return {"text": "ok", "images": [], "conversation_id": "c1"}
 
-    async def generate_stream(self, prompt, model, conversation_id="", attachments=None, gem_id=None):
+    async def generate_stream(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                              extended_thinking=False):
         self.calls.append(("generate_stream", prompt, model, gem_id))
         yield {"type": "delta", "text": "hello"}
         yield {"type": "final", "text": "hello", "images": [], "conversation_id": "c2"}

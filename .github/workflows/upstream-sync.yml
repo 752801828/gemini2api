@@ -1,0 +1,69 @@
+name: Upstream sync PR
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream into the sync branch
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/xwteam/gemini2api.git
+          git fetch origin main
+          git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git checkout -B sync/upstream-main origin/main
+          if ! git merge --no-ff --no-edit upstream/main; then
+            git merge --abort
+            echo "::error::Upstream merge has conflicts; resolve them in a dedicated integration branch."
+            exit 1
+          fi
+
+          git push --force-with-lease origin sync/upstream-main
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create a draft pull request
+        if: steps.merge.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh pr list --base main --head sync/upstream-main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "Updated existing upstream sync PR #$existing"
+            exit 0
+          fi
+
+          gh pr create \
+            --base main \
+            --head sync/upstream-main \
+            --draft \
+            --title "chore: sync upstream xwteam/gemini2api" \
+            --body "Automated upstream merge for review. This PR is never merged or deployed automatically. Resolve conflicts and verify the Flow bridge, patrol center, proxy pinning, retries, and API logs before merging."
