@@ -18,14 +18,24 @@ async function loadComponent(componentPath) {
     }
 
     try {
-        const response = await fetch(componentPath);
-        if (!response.ok) {
-            throw new Error(`Failed to load component: ${componentPath} (${response.status})`);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            const separator = componentPath.includes('?') ? '&' : '?';
+            const requestPath = attempt
+                ? `${componentPath}${separator}retry=${Date.now()}`
+                : componentPath;
+            const response = await fetch(requestPath, {
+                cache: attempt ? 'no-store' : 'default',
+            });
+            if (response.ok) {
+                const html = await response.text();
+                componentCache.set(componentPath, html);
+                return html;
+            }
+            if (response.status < 500 || attempt > 0) {
+                throw new Error(`Failed to load component: ${componentPath} (${response.status})`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
-        const html = await response.text();
-        // 缓存组件
-        componentCache.set(componentPath, html);
-        return html;
     } catch (error) {
         console.error(`Error loading component ${componentPath}:`, error);
         throw error;

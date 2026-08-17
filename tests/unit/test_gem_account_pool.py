@@ -463,3 +463,13 @@ def test_browser_center_is_removed_and_accounts_show_cookie_update_time():
     assert "CK 更新时间" in app
     assert "account-browser-profile" not in app
     assert "acc-browser-btn" not in app
+
+
+def test_component_loader_retries_transient_server_errors_once():
+    loader = (
+        Path(__file__).resolve().parents[2] / "static" / "app" / "component-loader.js"
+    ).read_text(encoding="utf-8")
+
+    assert "attempt < 2" in loader
+    assert "response.status < 500" in loader
+    assert "cache: attempt ? 'no-store' : 'default'" in loader
