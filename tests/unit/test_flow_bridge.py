@@ -121,7 +121,7 @@ def test_gemini_http_sessions_use_the_flow_account_proxy(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_flow_refresh_retries_three_times_before_notifying_maintenance(monkeypatch):
+async def test_flow_refresh_does_not_retry_terminal_client_errors(monkeypatch):
     pool = FakeAccountPool()
     service = FlowBridgeService(
         pool,
@@ -134,9 +134,34 @@ async def test_flow_refresh_retries_three_times_before_notifying_maintenance(mon
     service.set_failure_notifier(notifier)
     service._request = AsyncMock(side_effect=FlowBridgeError("profile_not_ready", "login required", 409))
     sleep = AsyncMock()
-    delays = iter([2.0, 5.0])
     monkeypatch.setattr("app.core.flow_bridge.asyncio.sleep", sleep)
-    monkeypatch.setattr("app.core.flow_bridge.random.uniform", lambda _minimum, _maximum: next(delays))
+    try:
+        with pytest.raises(FlowBridgeError):
+            await service.refresh_token(9)
+    finally:
+        await service.aclose()
+
+    assert service._request.await_count == 1
+    sleep.assert_not_awaited()
+    notifier.assert_awaited_once()
+    account, error = notifier.await_args.args
+    assert account.id == "flow-9"
+    assert error == "login required"
+
+
+@pytest.mark.asyncio
+async def test_flow_refresh_retries_transient_server_errors(monkeypatch):
+    service = FlowBridgeService(
+        FakeAccountPool(),
+        enabled=True,
+        base_url="http://flow.example",
+        secret="bridge-secret",
+        timeout=5,
+    )
+    service._request = AsyncMock(side_effect=FlowBridgeError("flow_unavailable", "unavailable", 503))
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.core.flow_bridge.asyncio.sleep", sleep)
+    monkeypatch.setattr("app.core.flow_bridge.random.uniform", lambda _minimum, _maximum: 2.0)
     try:
         with pytest.raises(FlowBridgeError):
             await service.refresh_token(9)
@@ -144,11 +169,7 @@ async def test_flow_refresh_retries_three_times_before_notifying_maintenance(mon
         await service.aclose()
 
     assert service._request.await_count == 3
-    assert [call.args[0] for call in sleep.await_args_list] == [2.0, 5.0]
-    notifier.assert_awaited_once()
-    account, error = notifier.await_args.args
-    assert account.id == "flow-9"
-    assert error == "login required"
+    assert sleep.await_count == 2
 
 
 @pytest.mark.asyncio

@@ -137,6 +137,9 @@ class FlowBridgeService:
                     return {"success": True, "account_id": account.id, "flow_token_id": token_id}
                 except Exception as error:
                     last_error = error
+                    status_code = int(getattr(error, "status_code", 0) or 0)
+                    if 400 <= status_code < 500:
+                        break
                     if attempt < 2:
                         await asyncio.sleep(random.uniform(2, 5))
 
