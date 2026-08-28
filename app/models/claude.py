@@ -27,8 +27,8 @@ class ClaudeRequest(BaseModel):
     def _flatten_system(cls, v):
         """Anthropic 的 system 允许字符串或文本块数组 [{type:"text",text:...}]（Claude Code 发的是
         数组，块上可能带 cache_control）。这里在类型校验前把数组拍平成字符串，下游只需处理 str。"""
-        if isinstance(v, list):
-            parts = [b.get("text", "") for b in v
+        if isinstance(v, (list, tuple)):
+            parts = [b["text"] for b in v
                      if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
             joined = "\n\n".join(p for p in parts if p)
             return joined or None

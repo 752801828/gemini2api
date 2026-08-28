@@ -18,6 +18,7 @@ def test_system_block_array_is_flattened():
     assert "You are Claude Code" in r.system
     assert r.system.index("x-anthropic-billing-header") < r.system.index("You are Claude Code")  # 顺序保持
     assert "\n\n" in r.system  # 块之间以空行分隔
+    assert r.system == _CC_SYSTEM[0]["text"] + "\n\n" + _CC_SYSTEM[1]["text"]  # 精确锁定分隔符，防止 "\n\n\n" 等误判通过
 
 
 def test_system_string_unchanged():
@@ -92,10 +93,50 @@ def test_messages_endpoint_string_system_regression(gem_client, monkeypatch):
 
 
 def test_count_tokens_accepts_array_system(gem_client):
-    """同一模型，顺带覆盖 count_tokens（纯函数、不调上游）。"""
+    """同一模型，顺带覆盖 count_tokens（纯函数、不调上游）。
+    只断言 >0 不够严谨：即使 system 被静默丢弃，无 system 的空壳请求也有 2 tokens 能通过。
+    改为跟"不带 system 的同一请求"比较，要求带 system 的计数严格更大，才能证明文本确实被计入。"""
+    base = gem_client.post("/v1/messages/count_tokens", json={
+        "model": "gemini-pro", "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hi"}],
+    }, headers=_AUTH)
+    assert base.status_code == 200, base.text
+    baseline_tokens = base.json()["input_tokens"]
+
     r = gem_client.post("/v1/messages/count_tokens", json={
         "model": "gemini-pro", "max_tokens": 100, "system": _CC_SYSTEM,
         "messages": [{"role": "user", "content": "hi"}],
     }, headers=_AUTH)
     assert r.status_code == 200, r.text
-    assert r.json()["input_tokens"] > 0
+    assert r.json()["input_tokens"] > baseline_tokens
+
+
+def test_messages_endpoint_empty_or_non_text_system_produces_no_system_section(gem_client, monkeypatch):
+    """端点级：空/非文本 system 拍平为 None 后，prompt 里不应出现游离的 'System:' 段，
+    且应与完全不传 system 时的 prompt 逐字节一致（不能悄悄留下空段落之类的痕迹）。"""
+    import app.routers.claude as cl
+
+    async def fake_generate(prompt, model, conversation_id="", attachments=None, gem_id=None,
+                            account_id=None, extended_thinking=False):
+        seen["prompt"] = prompt
+        return {"text": "ok", "conversation_id": "", "images": [], "thoughts": ""}
+
+    monkeypatch.setattr(cl.gemini_client, "generate", fake_generate)
+
+    seen = {}
+    no_system = gem_client.post("/v1/messages", json={
+        "model": "gemini-pro", "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hi"}],
+    }, headers=_AUTH)
+    assert no_system.status_code == 200, no_system.text
+    no_system_prompt = seen["prompt"]
+
+    for v in ([], [{"type": "image", "source": {}}], [{"type": "text"}], [{"type": "text", "text": ""}]):
+        seen.clear()
+        r = gem_client.post("/v1/messages", json={
+            "model": "gemini-pro", "max_tokens": 100, "system": v,
+            "messages": [{"role": "user", "content": "hi"}],
+        }, headers=_AUTH)
+        assert r.status_code == 200, r.text
+        assert "System:" not in seen["prompt"], f"{v!r} 不应产生 System: 段，但 prompt={seen['prompt']!r}"
+        assert seen["prompt"] == no_system_prompt, f"{v!r} 的 prompt 应与无 system 时完全一致"
