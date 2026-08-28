@@ -176,9 +176,12 @@ async def create_message(req: ClaudeRequest, request: Request):
                 "type": "base64", "media_type": im.get("mime", "image/png"), "data": im["b64"],
             }))
     blocks = list(image_blocks)
-    # 有文字才加文字块（图在前，文字在后；纯生图无描述时不加空块）
+    # 有文字才加文字块（图在前，文字在后；纯生图无描述时不加空块）。
+    # 上游回答真的是空字符串时，不能发一个 text:"" 的空文本块，也不能让 content
+    # 整体变成 []（defect ⑩）——两者都有客户端会踩坑（遍历 content 假设至少一块非空）。
+    # 用单空格占位，恰好一块，不改变非空/纯空白文本的既有行为。
     if text.strip() or not image_blocks:
-        blocks.append(ContentBlock(type="text", text=text))
+        blocks.append(ContentBlock(type="text", text=text if text else " "))
 
     return ClaudeResponse(
         id=msg_id,
@@ -368,11 +371,14 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     })
 
     async for word in split_into_chunks(text):
-        yield _claude_sse({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": word},
-        })
+        # split_into_chunks("") 因 "".split(" ") == [""] 会吐出一个空字符串块；
+        # 没有这道防线就会发出零长度的 content_block_delta（defect ⑩）。
+        if word:
+            yield _claude_sse({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": word},
+            })
 
     yield _claude_sse({"type": "content_block_stop", "index": 0})
 
