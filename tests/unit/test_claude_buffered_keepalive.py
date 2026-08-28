@@ -112,11 +112,15 @@ def _parse_sse(body: str):
 
 def test_claude_stream_frames_are_parseable_with_event_field(gem_client, monkeypatch):
     """官方 Anthropic SDK 按 event: 字段分发；纯 data: 帧会被解析成零事件。
-    钉住 buffered 路径（Claude Code 恒带 tools）：每帧必须带 event:，且 event == data["type"]。"""
+    钉住 buffered 路径（Claude Code 恒带 tools）：每帧必须带 event:，且 event == data["type"]。
+    同时用短 keepalive 间隔 + 慢 generate 真正压出 ping 注释帧，证明它们绝不会被解析成事件。"""
     import app.routers.claude as cl
+    from app.core import stream as stream_mod
+    monkeypatch.setattr(stream_mod, "SSE_KEEPALIVE_INTERVAL", 0.05)
 
     async def fake_generate(prompt, model, conversation_id="", attachments=None, gem_id=None,
                             account_id=None, extended_thinking=False):
+        await asyncio.sleep(0.25)  # 静默期够长，确保真的压出 ": ping\n\n" 注释帧
         return {"text": "done", "conversation_id": "", "images": [], "thoughts": ""}
 
     monkeypatch.setattr(cl.gemini_client, "generate", fake_generate)
@@ -126,6 +130,9 @@ def test_claude_stream_frames_are_parseable_with_event_field(gem_client, monkeyp
         "tools": [{"name": "Read", "description": "d", "input_schema": {"type": "object"}}],
     }, headers=_AUTH) as r:
         body = "".join(r.iter_text())
+
+    # pings were genuinely emitted during the slow generate() window
+    assert body.count(": ping\n\n") >= 1
 
     frames = _parse_sse(body)
     assert frames, "no SSE frames parsed"
