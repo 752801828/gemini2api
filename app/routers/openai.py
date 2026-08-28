@@ -288,7 +288,8 @@ async def chat_completions(req: ChatRequest, request: Request):
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, list):
-                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+                    content = "\n".join(b["text"] for b in content
+                                        if isinstance(b, dict) and isinstance(b.get("text"), str))
                 last_user_msg = content
                 break
         prompt = last_user_msg if last_user_msg else build_prompt_from_messages(messages_raw)
