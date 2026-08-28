@@ -52,7 +52,8 @@ def build_prompt_from_messages(messages: list[dict], system: str | None = None,
                         args_str = "" if args is None else json.dumps(args, ensure_ascii=False)
                     except (TypeError, ValueError):
                         args_str = str(args)
-                    text_parts.append(f"[Tool call: {block.get('name', '')}({args_str})]")
+                    # name 显式为 None 时也要落成空串，否则会渲染出 Python 字面量 "None"
+                    text_parts.append(f"[Tool call: {block.get('name') or ''}({args_str})]")
                 elif btype == "tool_result":
                     text_parts.append(f"[Tool result: {_flatten_tool_result_content(block.get('content'))}]")
                 elif isinstance(block.get("text"), str):

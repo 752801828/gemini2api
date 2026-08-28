@@ -56,6 +56,7 @@ class ClaudeResponse(BaseModel):
     model: str = ""
     content: list[ContentBlock] = Field(default_factory=list)
     stop_reason: str = "end_turn"
+    stop_sequence: str | None = None
     usage: ClaudeUsage = Field(default_factory=ClaudeUsage)
 
 

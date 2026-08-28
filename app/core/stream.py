@@ -63,7 +63,7 @@ async def iter_with_keepalive(agen, interval: float | None = None) -> AsyncItera
             await task
 
 
-async def sse_keepalive_during(task, interval: float | None = None):
+async def sse_keepalive_during(task: asyncio.Task, interval: float | None = None):
     """在后台 task 完成前周期 yield SSE comment ping，防止网关首字节/读超时。
 
     关键：task 在某个 interval 窗口内【抛异常】完成时，wait_for 会原样重抛该异常而非

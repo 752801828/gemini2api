@@ -288,6 +288,11 @@ async def chat_completions(req: ChatRequest, request: Request):
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, list):
+                    # 注意：这里对"没有可用 text 的 dict 块"（如纯图片块）刻意保留一个空串贡献，
+                    # 与 app/utils/prompt.py 里直接跳过该类块的做法不同 —— 不是笔误。原因是下一行的
+                    # 分支选择逻辑依赖此结果的真假值：纯图片消息展平后是 "\n"（非空即真），仍走
+                    # continuation 分支只发最新一条；若改成跳过就会变成 ""（假），错误落回
+                    # build_prompt_from_messages 把整段历史重发一遍。保留空串 = 保持既有行为逐字节不变。
                     content = "\n".join(b.get("text", "") if isinstance(b.get("text", ""), str) else ""
                                         for b in content if isinstance(b, dict))
                 last_user_msg = content
@@ -623,6 +628,8 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
             yield ping
     except BaseException:          # GeneratorExit / CancelledError on client disconnect
         gen_task.cancel()
+        if gen_task.done() and not gen_task.cancelled():
+            gen_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
         raise
 
     try:
@@ -639,6 +646,8 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                     yield ping
             except BaseException:          # GeneratorExit / CancelledError on client disconnect
                 retry_task.cancel()
+                if retry_task.done() and not retry_task.cancelled():
+                    retry_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
                 raise
             try:
                 result = retry_task.result()

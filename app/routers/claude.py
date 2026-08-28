@@ -281,6 +281,8 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
             yield ping
     except BaseException:          # GeneratorExit / CancelledError on client disconnect
         gen_task.cancel()
+        if gen_task.done() and not gen_task.cancelled():
+            gen_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
         raise
     try:
         result = gen_task.result()

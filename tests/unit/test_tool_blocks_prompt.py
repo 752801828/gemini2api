@@ -1,5 +1,5 @@
 """issue #10 后续：Claude Code 的 tool_use / tool_result 块此前被整段丢弃，agent 循环从第二轮起为空。"""
-from app.utils.prompt import build_prompt_from_messages
+from app.utils.prompt import build_prompt_from_messages, _flatten_tool_result_content
 
 _ROUNDTRIP = [
     {"role": "user", "content": [{"type": "text", "text": "read foo.py"}]},
@@ -132,3 +132,81 @@ def test_openai_conversation_continuation_image_only_latest_takes_last_user_bran
     assert r.status_code == 200
     assert captured["prompt"] == "\n"                    # 两个空贡献用换行连接，非空即 truthy
     assert "OLD HISTORY TEXT SHOULD NOT APPEAR" not in captured["prompt"]   # 未误用整段历史
+
+
+def test_tool_call_exact_format():
+    """"[Tool call: NAME(JSON)]" 是模型侧契约的精确格式，仅子串断言无法防住措辞被悄悄改动。"""
+    p = build_prompt_from_messages(
+        [{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t", "name": "Read", "input": {"file_path": "foo.py"}}]}])
+    assert p == 'Assistant: [Tool call: Read({"file_path": "foo.py"})]'
+
+
+def test_tool_result_exact_format():
+    """"[Tool result: TEXT]" 同样是模型侧契约的精确格式。"""
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": [{"type": "text", "text": "hello world"}]}]}])
+    assert p == 'Human: [Tool result: hello world]'
+
+
+def test_flatten_tool_result_content_dict_fallback():
+    """content 是 dict（既非 str 也非 list）：落入 str(content) 兜底分支。"""
+    assert _flatten_tool_result_content({"a": 1}) == "{'a': 1}"
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": {"a": 1}}]}])
+    assert p == "Human: [Tool result: {'a': 1}]"
+
+
+def test_flatten_tool_result_content_number_fallback():
+    """content 是数字：同样落入 str(content) 兜底分支。"""
+    assert _flatten_tool_result_content(42) == "42"
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": 42}]}])
+    assert p == "Human: [Tool result: 42]"
+
+
+def test_flatten_tool_result_content_none():
+    """content 是 None：走显式的 None 分支，产出空串而非 "None" 字面量。"""
+    assert _flatten_tool_result_content(None) == ""
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": None}]}])
+    assert p == "Human: [Tool result: ]"
+
+
+def test_flatten_tool_result_content_list_with_non_dict_entries():
+    """content 是列表但元素非 dict：这些元素被过滤掉，不抛异常，产出空串。"""
+    assert _flatten_tool_result_content(["x", 1, None]) == ""
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": ["x", 1, None]}]}])
+    assert p == "Human: [Tool result: ]"
+
+
+def test_flatten_tool_result_content_list_with_non_str_text():
+    """content 是列表，块存在但其 "text" 字段非字符串：该块被过滤掉，不抛异常，产出空串。"""
+    assert _flatten_tool_result_content([{"type": "text", "text": 123}]) == ""
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": 123}]}]}])
+    assert p == "Human: [Tool result: ]"
+
+
+def test_tool_use_name_none_renders_empty_not_python_none_literal():
+    """回归守卫：tool_use 的 name 显式为 None 时必须渲染成 "[Tool call: ()]"，
+    而不是 f-string 直接吃到 None 产出的字面量 "[Tool call: None()]"。"""
+    p = build_prompt_from_messages(
+        [{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": None, "input": {}}]}])
+    assert p == "Assistant: [Tool call: ({})]"
+
+
+def test_tool_result_image_only_content_pins_empty_marker():
+    """当前行为钉住：tool_result 的 content 只有图片块（无 text 块）时展平为空串，
+    渲染出空的 "[Tool result: ]" 标记而不是整段消失。这是刻意保留的行为——
+    即使内容为空也要让模型知道"这里发生过一次工具结果"，故仅作 pin 测试不是 bug 报告。"""
+    p = build_prompt_from_messages(
+        [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": [{"type": "image", "source": {"data": "x"}}]}]}])
+    assert p == "Human: [Tool result: ]"
