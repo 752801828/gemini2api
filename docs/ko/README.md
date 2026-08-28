@@ -60,6 +60,7 @@
 
 | 날짜 | 업데이트 내용 |
 |------|----------|
+| 2026-08-28 14:20:00 | v1.6.33 - 🔌 Claude Code 연결 오류 수정(issue #10): `system`이 텍스트 블록 배열 형식을 지원하여 422 해소; `tool_use`/`tool_result` 블록이 더 이상 삭제되지 않아 도구 루프 정상 동작; Anthropic 스트리밍을 표준 `event:`+`data:` 2줄 형식으로 변경; Claude buffered 스트림에 keepalive 추가 및 연결 해제 시 계정 슬롯 즉시 반환 |
 | 2026-08-14 22:50:00 | v1.6.32 - 🧠 사고를 프레임 단위로 스트리밍: 네이티브 Gemini의 사고가 생성 중 reasoning_content로 점진적으로 스트리밍되어(/v1/chat/completions) 답변보다 먼저 타이핑 효과로 표시됩니다. 패널의 '답변이 사고보다 먼저' 문제 수정. 마지막 프레임은 전체 사고를 폴백으로 유지. 사고 미사용/일반 채팅은 무회귀 |
 | 2026-08-14 22:40:00 | v1.6.31 - 🌊 스트리밍 간헐적 끊김 수정: 모델 생성 중 무음 구간에 네 개의 스트리밍 API(/v1/chat/completions, /v1/responses, /v1/messages, 네이티브 Gemini streamGenerateContent)에서 keepalive 하트비트를 전송하여 긴 응답이 국경 간/게이트웨이 유휴 시간 초과로 끊기지 않도록 함. 오해를 유발하던 패널 오류 문구도 수정 |
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 모델 테스트 패널 '사고' 토글 추가: 활성화 시 Gemini 확장 사고 활성화, 사고 과정은 답변 위에 축소 가능한 블록으로 표시 |
@@ -69,7 +70,6 @@
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 신규 OpenAI Responses API 지원(`/v1/responses` 또는 `/openai/v1/responses`): Chat Completions 대신 최신 Responses 프로토콜을 요구하는 클라이언트(예: 2026년 2월부로 Chat Completions 지원을 중단한 Codex CLI)가 gemini2api와 정상적으로 연동되도록 지원 — 텍스트 대화, 스트리밍, 함수/도구 호출을 Gemini 모델과 API 관리에서 구성한 타사 모델 모두에서 사용 가능; 스트리밍 이벤트는 공식 프로토콜 순서를 엄격히 준수(참조 구현에서 흔히 누락되는 두 개의 종료 이벤트 `response.output_text.done` / `response.function_call_arguments.done`을 수정); 서버 측 멀티턴 상태는 저장하지 않음 — `previous_response_id`는 조용히 이어지는 척하는 대신 명확한 오류를 반환하며, Codex CLI 같은 클라이언트는 전체 대화 히스토리를 직접 재전송함 |
 | 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 관리 페이지 Gemini 폴백 토글: 「Gemini→타사 폴백」을 원클릭으로 즉시 활성화/비활성화하고 영구 저장(.env 수정 및 재시작 불필요); 토글은 폴백만 제어하며, 타사 모델 직접 호출과 /v1/models 노출은 항상 유지 |
 | 2026-06-22 20:06:08 | v1.6.24 - 🧩 커스텀 Gem 지원: 관리 패널에 'Gem 관리' 페이지 신설, 계정 소유 커스텀 Gem 목록/생성/편집/삭제 가능; 임의 Gem을 '모델 이름으로 노출'하면 OpenAI 호환 클라이언트가 해당 모델 이름으로 호출 시 해당 Gem의 페르소나로 대화; Gem은 소속 계정에 바인딩되어 호출이 해당 계정으로만 라우팅(로드밸런싱 제외); Gem 삭제 시 모델 이름 매핑 자동 정리 |
-| 2026-06-22 14:21:48 | v1.6.23 - 🧠 타사 모델별 '사고(reasoning_effort)' 설정: API 관리에서 각 타사 모델에 사고 레벨 설정 가능(미설정/none/low/medium/high/사용자 지정), 전달 시 자동 주입 — OpenAI 호환 업스트림에는 reasoning_effort, Anthropic에는 thinking(budget_tokens)로 변환하고 응답 사고를 reasoning_content로 매핑; 미설정 시 무회귀, 사고 미지원 모델은 미설정 유지; '사고만(본문 일시 공백) 응답을 빈 응답으로 오판'도 수정 |
 
 ---
 

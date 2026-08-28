@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [1.6.33] - 2026-08-28
+
+### Fixed
+- 🔌 **修复 Claude Code 无法接入（issue #10）**，共三处：
+  - `/v1/messages` 的 `system` 现在同时接受**字符串**与 Anthropic 合法的**文本块数组**形态（Claude Code 发的是数组、块上带 `cache_control`），不再返回 422。
+  - 会话中的 `tool_use` / `tool_result` 内容块不再被丢弃：此前工具调用与工具结果都拿不到，导致 agent 工具循环从第二轮起就是空的。
+  - Anthropic 流式改为标准的 `event:` + `data:` 两行制（此前只发 `data:`，按 `event` 字段分发的官方客户端会解析不到事件）。
+- 🌊 Claude 的 buffered 流式路径（带工具/附件时走这条，Claude Code 恒命中）补上 SSE 保活心跳，长响应不再被网关空闲超时掐断；三处保活循环在客户端断开时会取消上游任务并及时归还账号槽位。
+- 🛡️ 消息内容块中 `text` 字段为非字符串（如 `null`）时不再 500，改为优雅跳过（四协议共用路径）。
+
 ## [1.6.32] - 2026-08-14
 
 ### Fixed
