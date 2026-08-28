@@ -1,8 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 from typing import Any
+
+# 官方 Gemini SDK 在 wire format 上用 camelCase（systemInstruction/generationConfig/
+# inlineData/functionCall/...）。这些请求模型此前只认 snake_case，官方 SDK 发来的
+# camelCase 字段会被 pydantic 当成未知字段静默丢弃（system prompt/生成参数/附件全部
+# 消失但请求仍然 200）。alias_generator=to_camel 让两种大小写都能被接受；
+# populate_by_name=True 保证既有 snake_case 调用方（内部测试、其它协议转发）不受影响。
+_CAMEL_CONFIG = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
 class GeminiPart(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     text: str | None = None
     function_call: dict | None = None
     function_response: dict | None = None
@@ -22,14 +32,20 @@ class GeminiFunctionDecl(BaseModel):
 
 
 class GeminiToolDef(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     function_declarations: list[GeminiFunctionDecl] = Field(default_factory=list)
 
 
 class GeminiToolConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     function_calling_config: dict = Field(default_factory=dict)
 
 
 class GenerationConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     temperature: float | None = None
     max_output_tokens: int | None = None
     top_p: float | None = None
@@ -37,6 +53,8 @@ class GenerationConfig(BaseModel):
 
 
 class GeminiRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     contents: list[GeminiContent]
     tools: list[GeminiToolDef] | None = None
     tool_config: GeminiToolConfig | None = None

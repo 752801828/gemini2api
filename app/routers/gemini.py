@@ -58,14 +58,56 @@ def _parse_system(system_instruction) -> str | None:
     return None
 
 
+def _render_function_call_part(fc: dict) -> str:
+    """渲染 functionCall part，格式与 app/utils/prompt.py 里 Anthropic tool_use 分支
+    的 "[Tool call: NAME(ARGS_JSON)]" 保持一致，供四协议共用同一套模型侧契约。"""
+    name = fc.get("name") or ""
+    args = fc.get("args")
+    try:
+        args_str = "" if args is None else json.dumps(args, ensure_ascii=False)
+    except (TypeError, ValueError):
+        args_str = str(args)
+    return f"[Tool call: {name}({args_str})]"
+
+
+def _render_function_response_part(fr: dict) -> str:
+    """渲染 functionResponse part，格式与 app/utils/prompt.py 里 Anthropic tool_result
+    分支的 "[Tool result: TEXT]" 保持一致。"""
+    resp = fr.get("response")
+    if resp is None:
+        resp_str = ""
+    elif isinstance(resp, str):
+        resp_str = resp
+    else:
+        try:
+            resp_str = json.dumps(resp, ensure_ascii=False)
+        except (TypeError, ValueError):
+            resp_str = str(resp)
+    return f"[Tool result: {resp_str}]"
+
+
 def _parse_contents(contents):
-    """从 Gemini contents 解析出 messages 和 attachments（inline_data）。"""
+    """从 Gemini contents 解析出 messages 和 attachments（inline_data）。
+
+    functionCall/functionResponse part（Gemini 原生工具循环的载体）此前完全不被识别——
+    只认 text part，一轮工具调用/工具结果会在拍平时整体消失，agent 循环从第二轮起断链。
+    GeminiPart 的 alias_generator 已经把 camelCase/snake_case 两种入参形态统一收敛到
+    同一批 snake_case 属性上，这里直接用 part.function_call / part.function_response 即可，
+    不需要再分别判断两种大小写。
+    """
     messages = []
     attachments = []
     idx = 0
     for content in contents:
         role = content.role
-        text_parts = [part.text for part in content.parts if part.text]
+        text_parts = []
+        for part in content.parts:
+            if part.text:
+                text_parts.append(part.text)
+            elif isinstance(part.function_call, dict):
+                text_parts.append(_render_function_call_part(part.function_call))
+            elif isinstance(part.function_response, dict):
+                text_parts.append(_render_function_response_part(part.function_response))
         if text_parts:
             messages.append({"role": role, "content": " ".join(text_parts)})
         for part in content.parts:
