@@ -61,3 +61,20 @@ async def iter_with_keepalive(agen, interval: float | None = None) -> AsyncItera
         task.cancel()
         with contextlib.suppress(BaseException):
             await task
+
+
+async def sse_keepalive_during(task, interval: float | None = None):
+    """在后台 task 完成前周期 yield SSE comment ping，防止网关首字节/读超时。
+
+    关键：task 在某个 interval 窗口内【抛异常】完成时，wait_for 会原样重抛该异常而非
+    TimeoutError。绝不能让它逃出本生成器——否则会击穿调用方的 try/except。故非超时的完成
+    （成功或异常）一律 return，让控制权落回调用方的 task.result()，由那里统一做错误映射。"""
+    if interval is None:
+        interval = SSE_KEEPALIVE_INTERVAL
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=interval)
+        except asyncio.TimeoutError:
+            yield SSE_KEEPALIVE_FRAME
+        except Exception:
+            return

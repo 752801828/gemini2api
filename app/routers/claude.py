@@ -1,6 +1,7 @@
 import time
 import uuid
 import json
+import asyncio
 import logging
 from typing import AsyncGenerator
 
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
-from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_FRAME
+from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.models.claude import (
     ClaudeRequest, ClaudeResponse, ContentBlock, ClaudeUsage,
     ClaudeModelInfo, ClaudeModelList,
@@ -268,9 +269,12 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
 async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, attachments, msg_id: str, display_model: str = "", gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
     """非流式收集 + 切片：用于有工具调用/附件的场景。"""
     model_name = display_model or model
+    gen_task = asyncio.create_task(gemini_client.generate(prompt, model, "", attachments,
+                                                          gem_id=gem_id, account_id=account_id))
+    async for ping in sse_keepalive_during(gen_task):
+        yield ping
     try:
-        result = await gemini_client.generate(prompt, model, "", attachments,
-                                              gem_id=gem_id, account_id=account_id)
+        result = gen_task.result()
     except Exception as e:
         yield format_sse({"type": "error", "error": {"type": "api_error", "message": str(e)}})
         return

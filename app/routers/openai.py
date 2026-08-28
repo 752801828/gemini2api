@@ -14,7 +14,7 @@ from app.core.api_forwarder import forward_to_provider, open_stream
 from app.core.fallback import fallback_enabled, is_empty_result, get_fallback_entries, openai_data_is_empty
 from app.core.conversation_store import conversation_store
 from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model
-from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME
+from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.models.openai import (
     ChatRequest, ChatResponse, Choice, ChoiceMessage,
     StreamChunk, StreamChoice, StreamDelta,
@@ -66,21 +66,7 @@ def _images_md_from_base(images: list, base: str) -> str:
 _SSE_KEEPALIVE_INTERVAL = SSE_KEEPALIVE_INTERVAL  # 单一来源见 app/core/stream.py
 
 
-async def _sse_keepalive_during(task: asyncio.Task, interval: float = _SSE_KEEPALIVE_INTERVAL):
-    """在后台 task 完成前周期 yield SSE comment ping，防止网关首字节/读超时。
-
-    关键：task 在某个 interval 窗口内【抛异常】完成时，wait_for 会原样重抛该异常而非
-    TimeoutError。绝不能让它逃出本生成器——否则会击穿调用方的 try/except（重试 + _err_chunk
-    映射全成死代码），并把已发首帧的响应中途 abort。故非超时的完成（成功或异常）一律 return，
-    让控制权落回调用方的 task.result()，由那里统一做重试/错误映射。"""
-    while not task.done():
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=interval)
-        except asyncio.TimeoutError:
-            yield ": ping\n\n"
-        except Exception:
-            # task 已以异常完成：停止 ping，让调用方 task.result() 重抛并走既有错误处理
-            return
+_sse_keepalive_during = sse_keepalive_during  # 实现下沉至 app/core/stream.py（供 claude 侧复用）
 
 
 async def _sse_stream_chunks(text: str, completion_id: str, model_name: str, *, fast: bool = False):
