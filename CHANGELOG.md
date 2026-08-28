@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [1.6.36] - 2026-08-28
+
+### Fixed
+- 🚨 **OpenAI 流式的上游错误不再伪装成正常回答**：此前失败会以 `content: "Error: ..."` + `finish_reason: "stop"` 发出，官方 SDK 视为一次**成功完成**、不抛异常、无法重试。现改为发出标准的 `data: {"error": {...}}` 帧（openai-python 会据此抛 `APIError`），错误类型沿用统一的 `classify_error`。v1.6.35 只修了 Anthropic 侧，本版补齐 OpenAI 侧。
+- 🚦 上游 4xx 的错误类型细化：400/401/403/404 → `invalid_request_error`（此前一律 `api_error`），429 仍为 `rate_limit_error`，5xx 仍为 `api_error`；状态码透传不变。
+- 📐 Anthropic 响应的 `citations` 字段在流式与非流式之间保持一致（此前只有流式帧带）；同时 v1.6.35 去掉的 `id/name/input/source` null 噪音**保持不变**。
+- 🛡️ `build_prompt_from_messages` 对非字符串 `content`（dict/数字等）不再抛 `TypeError`（此前一次模型放宽就会变成 500）；既有字符串/数组输入的输出逐字节不变。
+
+### Notes
+- 生图意图检测的习语排除表**维持 v1.6.35 的内容**（`draw a line/map/card` 等仍视为习语）。本版曾尝试放宽以提高真实画图请求的召回，但评审实测发现：编程语境里 `"draw a line under this discussion"` 这类句子会让**客户端声明的 tools 被静默丢弃**。两种误判代价不对称——误判为图片会让 agent 循环无声损坏，漏判只是当次不走生图分支且用户可改述——故按"宁可保住工具"的方向回退。
+
 ## [1.6.35] - 2026-08-28
 
 ### Fixed
