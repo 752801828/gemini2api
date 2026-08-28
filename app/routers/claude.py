@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
-from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_FRAME, sse_keepalive_during
+from app.core.stream import split_into_chunks, iter_with_keepalive, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.models.claude import (
     ClaudeRequest, ClaudeResponse, ContentBlock, ClaudeUsage,
     ClaudeModelInfo, ClaudeModelList,
@@ -20,6 +20,11 @@ from app.utils.prompt import build_prompt_from_messages, extract_attachments
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
 logger = logging.getLogger(__name__)
+
+
+def _claude_sse(data: dict) -> str:
+    """Anthropic 流式是 event+data 两行制（官方 SDK 按 event 字段分发），与 OpenAI 的纯 data 帧不同。"""
+    return f"event: {data['type']}\ndata: {json.dumps(data)}\n\n"
 
 
 def _apply_model_whitelist(models: list[str]) -> list[str]:
@@ -200,7 +205,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
         return
 
     # === 真流式路径（纯文本）===
-    yield format_sse({
+    yield _claude_sse({
         "type": "message_start",
         "message": {
             "id": msg_id,
@@ -211,7 +216,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
             "usage": {"input_tokens": estimate_tokens(prompt), "output_tokens": 0},
         },
     })
-    yield format_sse({
+    yield _claude_sse({
         "type": "content_block_start",
         "index": 0,
         "content_block": {"type": "text", "text": ""},
@@ -230,7 +235,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
                 delta = evt.get("text", "")
                 full_text += delta
                 if delta:
-                    yield format_sse({
+                    yield _claude_sse({
                         "type": "content_block_delta",
                         "index": 0,
                         "delta": {"type": "text_delta", "text": delta},
@@ -243,7 +248,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
                     tail = final_text[len(full_text):]
                     full_text = final_text
                     if tail:
-                        yield format_sse({
+                        yield _claude_sse({
                             "type": "content_block_delta",
                             "index": 0,
                             "delta": {"type": "text_delta", "text": tail},
@@ -251,19 +256,19 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
                 else:
                     full_text = final_text
     except Exception as e:
-        yield format_sse({
+        yield _claude_sse({
             "type": "content_block_delta",
             "index": 0,
             "delta": {"type": "text_delta", "text": f"Error: {e}"},
         })
 
-    yield format_sse({"type": "content_block_stop", "index": 0})
-    yield format_sse({
+    yield _claude_sse({"type": "content_block_stop", "index": 0})
+    yield _claude_sse({
         "type": "message_delta",
         "delta": {"stop_reason": "end_turn"},
         "usage": {"output_tokens": estimate_tokens(full_text)},
     })
-    yield format_sse({"type": "message_stop"})
+    yield _claude_sse({"type": "message_stop"})
 
 
 async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, attachments, msg_id: str, display_model: str = "", gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
@@ -280,12 +285,12 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     try:
         result = gen_task.result()
     except Exception as e:
-        yield format_sse({"type": "error", "error": {"type": "api_error", "message": str(e)}})
+        yield _claude_sse({"type": "error", "error": {"type": "api_error", "message": str(e)}})
         return
 
     text = result.get("text", "")
 
-    yield format_sse({
+    yield _claude_sse({
         "type": "message_start",
         "message": {
             "id": msg_id,
@@ -302,48 +307,48 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
         if parsed["type"] == "tool_calls":
             for i, tc in enumerate(parsed["tool_calls"]):
                 block_id = f"toolu_{uuid.uuid4().hex[:8]}"
-                yield format_sse({
+                yield _claude_sse({
                     "type": "content_block_start",
                     "index": i,
                     "content_block": {"type": "tool_use", "id": block_id, "name": tc["name"], "input": {}},
                 })
                 args_str = json.dumps(tc.get("arguments", {}))
-                yield format_sse({
+                yield _claude_sse({
                     "type": "content_block_delta",
                     "index": i,
                     "delta": {"type": "input_json_delta", "partial_json": args_str},
                 })
-                yield format_sse({"type": "content_block_stop", "index": i})
+                yield _claude_sse({"type": "content_block_stop", "index": i})
 
-            yield format_sse({
+            yield _claude_sse({
                 "type": "message_delta",
                 "delta": {"stop_reason": "tool_use"},
                 "usage": {"output_tokens": estimate_tokens(text)},
             })
-            yield format_sse({"type": "message_stop"})
+            yield _claude_sse({"type": "message_stop"})
             return
         text = parsed.get("content", text)
 
-    yield format_sse({
+    yield _claude_sse({
         "type": "content_block_start",
         "index": 0,
         "content_block": {"type": "text", "text": ""},
     })
 
     async for word in split_into_chunks(text):
-        yield format_sse({
+        yield _claude_sse({
             "type": "content_block_delta",
             "index": 0,
             "delta": {"type": "text_delta", "text": word},
         })
 
-    yield format_sse({"type": "content_block_stop", "index": 0})
+    yield _claude_sse({"type": "content_block_stop", "index": 0})
 
-    yield format_sse({
+    yield _claude_sse({
         "type": "message_delta",
         "delta": {"stop_reason": "end_turn"},
         "usage": {"output_tokens": estimate_tokens(text)},
     })
 
-    yield format_sse({"type": "message_stop"})
+    yield _claude_sse({"type": "message_stop"})
 
