@@ -1,5 +1,6 @@
 """OpenAI Responses API（POST /responses）。挂载见 app/main.py（/v1、/openai/v1 前缀）。
 Gemini 路径复用 account_pool + 现有工具模拟机制；第三方模型见 responses_thirdparty.py。"""
+import asyncio
 import json
 import logging
 import uuid
@@ -13,7 +14,7 @@ from app.core.gemini_client import GEMINI_MODELS, _resolve_model
 from app.core.responses_protocol import (
     parse_responses_input, build_responses_object, new_response_id, ResponsesStreamEncoder,
 )
-from app.core.stream import iter_with_keepalive, SSE_KEEPALIVE_FRAME
+from app.core.stream import iter_with_keepalive, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.routers.openai import _images_to_markdown
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens
 from app.utils.prompt import build_prompt_from_messages, extract_attachments
@@ -181,11 +182,21 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
     yield enc.in_progress()
 
     if has_tools or attachments:
-        # 工具调用/附件：需要完整文本才能判断，走非流式收集（同 openai.py 的 buffered 门禁）
+        # 工具调用/附件：需要完整文本才能判断，走非流式收集（同 openai.py 的 buffered 门禁）。
+        # Codex CLI 恒带 tools，这条分支必走——generate() 阻塞期间必须有心跳，否则首字节超时。
+        gen_task = asyncio.create_task(gemini_client.generate(prompt, model, "", attachments,
+                                                              gem_id=gem_id, account_id=gem_account_id,
+                                                              extended_thinking=extended_thinking))
         try:
-            result = await gemini_client.generate(prompt, model, "", attachments,
-                                                  gem_id=gem_id, account_id=gem_account_id,
-                                                  extended_thinking=extended_thinking)
+            async for ping in sse_keepalive_during(gen_task):
+                yield ping
+        except BaseException:          # GeneratorExit / CancelledError on client disconnect
+            gen_task.cancel()
+            if gen_task.done() and not gen_task.cancelled():
+                gen_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+            raise
+        try:
+            result = gen_task.result()
         except Exception as e:
             # 扩展思维链路径失败：先原样退回非思维链重试一次
             if extended_thinking:

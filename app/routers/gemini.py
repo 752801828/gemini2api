@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import AsyncGenerator
@@ -8,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
 from app.core.gemini_client import HTTPStatusError, classify_error
-from app.core.stream import split_into_chunks, iter_with_keepalive
+from app.core.stream import split_into_chunks, iter_with_keepalive, sse_keepalive_during
 from app.models.gemini import (
     GeminiRequest,
     GeminiResponse,
@@ -261,11 +262,22 @@ async def stream_generate_content(model: str, req: GeminiRequest, request: Reque
         prompt_tokens = estimate_tokens(prompt)
         response_text = ""
 
-        # 有工具/附件：需完整文本，走非流式收集后切片（零回归）
+        # 有工具/附件：需完整文本，走非流式收集后切片（零回归）。
+        # generate() 阻塞期间此前零字节输出——不是空闲读超时，是首字节超时，60s 首字节限制的
+        # 代理会直接杀连接。NDJSON 流不能用 SSE 注释帧保活，改发空行（与下方真流式路径同款）。
         if has_tools or attachments:
+            gen_task = asyncio.create_task(gemini_client.generate(prompt, model, "", attachments,
+                                                                  gem_id=gem_id, account_id=gem_account_id))
             try:
-                result = await gemini_client.generate(prompt, model, "", attachments,
-                                                      gem_id=gem_id, account_id=gem_account_id)
+                async for _ping in sse_keepalive_during(gen_task):
+                    yield "\n"
+            except BaseException:          # GeneratorExit / CancelledError on client disconnect
+                gen_task.cancel()
+                if gen_task.done() and not gen_task.cancelled():
+                    gen_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+                raise
+            try:
+                result = gen_task.result()
             except Exception as e:
                 yield json.dumps({"error": {"message": str(e), "type": "api_error"}}) + "\n"
                 return
