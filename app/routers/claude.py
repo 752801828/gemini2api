@@ -271,8 +271,12 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     model_name = display_model or model
     gen_task = asyncio.create_task(gemini_client.generate(prompt, model, "", attachments,
                                                           gem_id=gem_id, account_id=account_id))
-    async for ping in sse_keepalive_during(gen_task):
-        yield ping
+    try:
+        async for ping in sse_keepalive_during(gen_task):
+            yield ping
+    except BaseException:          # GeneratorExit / CancelledError on client disconnect
+        gen_task.cancel()
+        raise
     try:
         result = gen_task.result()
     except Exception as e:

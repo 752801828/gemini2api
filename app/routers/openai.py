@@ -288,8 +288,8 @@ async def chat_completions(req: ChatRequest, request: Request):
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, list):
-                    content = "\n".join(b["text"] for b in content
-                                        if isinstance(b, dict) and isinstance(b.get("text"), str))
+                    content = "\n".join(b.get("text", "") if isinstance(b.get("text", ""), str) else ""
+                                        for b in content if isinstance(b, dict))
                 last_user_msg = content
                 break
         prompt = last_user_msg if last_user_msg else build_prompt_from_messages(messages_raw)
@@ -618,8 +618,12 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                                             gem_id=gem_id, account_id=account_id)
 
     gen_task = asyncio.create_task(_run_generate())
-    async for ping in _sse_keepalive_during(gen_task):
-        yield ping
+    try:
+        async for ping in _sse_keepalive_during(gen_task):
+            yield ping
+    except BaseException:          # GeneratorExit / CancelledError on client disconnect
+        gen_task.cancel()
+        raise
 
     try:
         result = gen_task.result()
@@ -630,8 +634,12 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                 gemini_client.generate(full_prompt, model, "", attachments,
                                        gem_id=gem_id, account_id=account_id)
             )
-            async for ping in _sse_keepalive_during(retry_task):
-                yield ping
+            try:
+                async for ping in _sse_keepalive_during(retry_task):
+                    yield ping
+            except BaseException:          # GeneratorExit / CancelledError on client disconnect
+                retry_task.cancel()
+                raise
             try:
                 result = retry_task.result()
             except Exception as e2:

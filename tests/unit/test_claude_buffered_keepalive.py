@@ -49,3 +49,44 @@ def test_openai_keepalive_alias_still_exported():
     """回归：openai.py 仍暴露 _sse_keepalive_during（既有源码守卫测试依赖它）。"""
     import app.routers.openai as oai
     assert callable(oai._sse_keepalive_during)
+
+
+def test_claude_buffered_cancels_gen_task_on_client_disconnect(monkeypatch):
+    """FIX A 钉住：客户端提前断开（生成器被 aclose，即 GeneratorExit）时，后台 generate task
+    必须被显式 cancel，不能留成脱缰 task 继续跑完并占着账号槽位。
+
+    driving a true HTTP-level disconnect through TestClient's synchronous streaming iterator
+    isn't reliably deterministic here (would need to abort a background thread mid-iteration),
+    so per the fallback specified: directly exercise the async generator — pull exactly one
+    frame (the keepalive ping) via __anext__(), then aclose() it to simulate disconnect, and
+    assert the task ends up cancelled. Uses asyncio.run per project convention (no
+    pytest-asyncio / no @pytest.mark.asyncio)."""
+    import contextlib
+    import app.routers.claude as cl
+    from app.core import stream as stream_mod
+
+    monkeypatch.setattr(stream_mod, "SSE_KEEPALIVE_INTERVAL", 0.05)
+
+    async def slow_generate(prompt, model, conversation_id="", attachments=None, gem_id=None,
+                            account_id=None, extended_thinking=False):
+        await asyncio.sleep(5)   # long enough that aclose() always arrives first
+        return {"text": "done", "conversation_id": "", "images": [], "thoughts": ""}
+
+    monkeypatch.setattr(cl.gemini_client, "generate", slow_generate)
+
+    async def run():
+        tasks_before = asyncio.all_tasks()
+        agen = cl._stream_claude_buffered("prompt", "gemini-pro", False, [], "msg_1")
+        first = await agen.__anext__()          # pull exactly the first (keepalive) frame
+        assert ": ping" in first
+        new_tasks = asyncio.all_tasks() - tasks_before
+        assert len(new_tasks) == 1               # exactly the gen_task created inside
+        gen_task = next(iter(new_tasks))
+        assert not gen_task.done()
+
+        await agen.aclose()                      # simulate client disconnect
+        with contextlib.suppress(asyncio.CancelledError):
+            await gen_task
+        assert gen_task.cancelled()               # slot-releasing cancellation actually landed
+
+    asyncio.run(run())

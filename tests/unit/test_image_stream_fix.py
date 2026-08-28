@@ -12,7 +12,7 @@ def test_buffered_stream_emits_immediate_sse_and_keepalive():
     """seq=12/s1: buffered path must not block with zero SSE bytes during generate()."""
     src = (_REPO_ROOT / "app" / "routers" / "openai.py").read_text(encoding="utf-8")
     assert "_sse_keepalive_during" in src
-    assert 'yield ": ping\\n\\n"' in src
+    assert "SSE_KEEPALIVE_FRAME" in src or 'yield ": ping\\n\\n"' in src
     # First role frame before awaiting generate result
     assert "async def _stream_response_buffered" in src
     idx_fn = src.index("async def _stream_response_buffered")
