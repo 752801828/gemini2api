@@ -52,6 +52,38 @@ class TestImageGenerationIntent:
         assert tools.is_image_generation_intent(text) is True
 
 
+class TestR4DrawArticleIdiomTrueAmbiguity:
+    """R4：map/maps、card/cards、line/lines 曾在 _DRAW_ARTICLE_IDIOM_OBJECTS 闭集里，
+    但它们既是习语宾语也是**真实可画之物**，是真歧义——"draw a map of the kingdom"、
+    "draw a card for my friend" 是合理的画图请求，此前却被误判成非图片意图，压制了
+    带 tools 时的生图。宁可误判为要画图也不要漏掉真实请求，与该检测器"宁多勿漏"的
+    既有取向一致，故这三组已移出闭集；其余纯抽象习语宾语不受影响，继续排除。"""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "draw a map of the kingdom",
+            "draw a card for my friend",
+            "draw a line drawing of a cat",
+        ],
+    )
+    def test_ambiguous_but_real_draw_requests_now_detected(self, text):
+        assert tools.is_image_generation_intent(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "draw a conclusion",
+            "draw an outline of the plan",
+            "draw a distinction between them",
+        ],
+    )
+    def test_purely_abstract_idioms_still_excluded(self, text):
+        """无歧义的纯抽象习语宾语（conclusion/outline/distinction 等）不在移除范围内，
+        必须继续被排除在图片意图之外。"""
+        assert tools.is_image_generation_intent(text) is False
+
+
 class TestAsciiIntentReGuard:
     def test_empty_pattern_table_never_matches_everything(self, monkeypatch):
         """若关键词表被清空，alts 为空时绝不能退化成 re.compile("")——那会匹配任意

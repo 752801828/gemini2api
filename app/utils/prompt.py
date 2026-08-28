@@ -97,6 +97,12 @@ def build_prompt_from_messages(messages: list[dict], system: str | None = None,
                 elif isinstance(block.get("text"), str):
                     text_parts.append(block["text"])
             content = "\n".join(text_parts)
+        elif not isinstance(content, str):
+            # R5 硬化：content 目前各协议模型都只产出 str/list（这里理论上不可达），但一次
+            # 模型放宽（如放宽成 dict/number）就会让 content 原样带着非 str 值往下走——下面
+            # tool_calls 分支的 "\n".join([content, *call_parts]) 会直接 TypeError 变成 500。
+            # 安全归一化成 str；不改变既有 str/list 输入的输出（本分支只在两者都不是时触发）。
+            content = str(content)
 
         # OpenAI 的 assistant 消息把工具调用放在同级 tool_calls 字段（而非 content 块里），
         # 此前完全没有被渲染——模型看到一个 tool 结果却不知道是哪个工具调用产生的。

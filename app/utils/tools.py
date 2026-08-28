@@ -28,16 +28,24 @@ _IMAGE_INTENT_PATTERNS = (
 
 # "draw a" / "draw an" 自身不含图像名词，是纯前缀片段。英文里它绝大多数时候就是在
 # 要图（"draw a cat" / "draw an elephant"），只有一个收窄的习语宾语闭集是例外
-# （"draw a conclusion/distinction/parallel/line/..."）。用负向前瞻排除这个闭集，
+# （"draw a conclusion/distinction/parallel/outline/..."）。用负向前瞻排除这个闭集，
 # 而不是反过来要求后随图像名词——后者会把 "draw a cat" 这类最常见的英文生图请求
 # 也一并排除在外，导致 has_tools 常年为 True、四个 router 全部注入工具 prompt、
 # 压制 Gemini 的生图（见 app/routers/openai.py:305 的注释），是本文件曾经出现过的
 # 一次过度修正，务必不要重蹈。
+#
+# R4：map/maps、card/cards、line/lines 曾经也在这张闭集里，但它们既是习语宾语
+# （"draw a map/parallel"、"draw a card from the deck"、"draw a line"）也是**真实
+# 可画之物**（"draw a map of the kingdom"、"draw a card for my friend"、"draw a
+# line drawing of a cat"），是真歧义。该检测器的既有取向是"宁可误判成要画图，也不
+# 要漏掉真实的生图请求"（has_tools 误判的代价远小于压制掉真实生图意图），故三组
+# 移出闭集；其余纯抽象名词（conclusion/distinction/parallel/inference/outline/
+# comparison/analogy/attention/blank/breath/salary/crowd）无此歧义，继续保留。
 _DRAW_ARTICLE_IDIOM_OBJECTS = (
     "conclusion", "conclusions", "distinction", "distinctions", "parallel", "parallels",
-    "line", "lines", "inference", "inferences", "outline", "outlines", "comparison",
+    "inference", "inferences", "outline", "outlines", "comparison",
     "comparisons", "analogy", "analogies", "attention", "blank", "blanks", "breath",
-    "card", "cards", "salary", "crowd", "crowds", "map", "maps",
+    "salary", "crowd", "crowds",
 )
 _DRAW_ARTICLE_RE = (
     r"\bdraw an?\b(?!\s+(?:" + "|".join(_DRAW_ARTICLE_IDIOM_OBJECTS) + r")\b)"

@@ -38,7 +38,6 @@ class TestMatcherFalsePositives:
             "please draw a conclusion",          # 原 xfail
             "draw an outline of the plan",
             "we should draw a distinction between the two",
-            "draw a line under this discussion",
             "let me draw an inference from the logs",
         ],
     )
@@ -75,6 +74,16 @@ class TestMatcherStillPositive:
             "draw an elephant",
             "draw a robot in space",
             "please draw a cat for me",
+            # R4：map/card/line 既是习语宾语也是真实可画之物（真歧义）——
+            # "draw a map of the kingdom"/"draw a card for my friend" 是合理的画图请求，
+            # 曾被误判成习语（跟 "draw a conclusion" 混为一谈）而压制生图。宁可误判为
+            # 要画图也不要漏掉真实请求，故这三组已移出习语闭集，包括纯习语用法
+            # （如 "draw a line under this discussion"）也会跟着改判 True——这是已知的
+            # 权衡取舍，不是漏改。
+            "draw a map of the kingdom",
+            "draw a card for my friend",
+            "draw a line drawing of a cat",
+            "draw a line under this discussion",
         ],
     )
     def test_genuine_requests_still_detected(self, text):
