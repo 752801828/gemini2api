@@ -414,6 +414,7 @@ curl http://localhost:5918/claude/v1/models/gemini-2.5-pro \
   ],
   "model": "gemini-2.5-pro",
   "stop_reason": "end_turn",
+  "stop_sequence": null,
   "usage": {
     "input_tokens": 10,
     "output_tokens": 20

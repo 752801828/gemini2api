@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+## [1.6.34] - 2026-08-28
+
+### Fixed
+- 🧹 **Anthropic 协议细节与健壮性打磨**（v1.6.33 Claude Code 修复的收尾）：
+  - 响应补上 Anthropic 规范的 `stop_sequence` 字段（未命中停止序列时为 `null`），并同步补齐 en / ko / zh-TW 三份 API 文档（此前只有 zh-CN / ja 写了）。
+  - 工具调用块的 `name` 显式为 `null` 时不再渲染出 Python 字面量 `None`。
+  - 客户端断开时的保活守卫补上异常取回，避免极端时序下 asyncio 打印 "Task exception was never retrieved"。
+- 🧪 测试加固：补上工具渲染格式的精确断言、`tool_result` 内容各种退化形态的覆盖、以及 OpenAI buffered 流式断连取消（主路径 + 重试路径）的测试；修正一条恒真的空转断言与一处被不必要放宽的源码守卫。
+
 ## [1.6.33] - 2026-08-28
 
 ### Fixed
