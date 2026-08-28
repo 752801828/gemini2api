@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.34-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.35-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -61,6 +61,7 @@
 
 | 日期 | 更新內容 |
 |------|----------|
+| 2026-08-28 17:30:00 | v1.6.35 - 🛠️ 協定一致性與健壯性大修：修復生圖意圖誤判導致**客戶端工具被靜默丟棄**（四協定共用）、上游錯誤偽裝成正常回答、`HTTPStatusError` 逃逸成裸 500（池滿改 529+Retry-After）、`/v1/responses` 與 native Gemini buffered 分支缺失的串流保活、原生 Gemini 不認官方 SDK camelCase 報文、OpenAI `tool_calls` 被丟棄、第三方 Anthropic 轉發工具迴圈第二輪硬失敗，以及 Anthropic 回應結構對齊 |
 | 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic 協定細節打磨：回應補上規範的 `stop_sequence` 欄位並同步五語言 API 文件；工具呼叫區塊 name 為 null 時不再渲染成 None；斷線保活守衛補異常取回；並加固工具渲染格式與斷線取消的測試覆蓋 |
 | 2026-08-28 14:20:00 | v1.6.33 - 🔌 修復 Claude Code 無法接入（issue #10）：`system` 支援文字區塊陣列不再 422；`tool_use`/`tool_result` 區塊不再被丟棄（工具迴圈可用）；Anthropic 串流改為標準 event+data 兩行制；並為 Claude buffered 串流補保活、斷線及時歸還帳號槽位 |
 | 2026-08-14 22:50:00 | v1.6.32 - 🧠 思考內容逐幀串流：原生 Gemini 的思考過程在生成階段就作為 reasoning_content 逐幀增量流出（/v1/chat/completions），思考先於答案顯示、帶打字機效果，修復面板「答案早於思考」；收尾仍帶完整思考兜底，不開思考/一般對話零回歸 |
@@ -70,7 +71,6 @@
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最輕量的 Flash-Lite 檔（3.5 Flash-Lite），在 Pro/Flash 被限額時仍有可用模型可選（內部按帳號真實模型動態映射，沿用固定公開名） |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 與 Favicon：左上角圖示更換為自訂品牌 Logo 圖片（並壓縮至 128×128、約 16KB，較原圖縮小約 97%）；管理面板與登入頁新增瀏覽器分頁圖示（Favicon，使用同一 Logo） |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 新增 OpenAI Responses API 支援（`/v1/responses` 或 `/openai/v1/responses`）：讓需要新版 Responses 協議的客戶端（如 2026 年 2 月起砍掉 Chat Completions 支援的 Codex CLI）能正常接入 gemini2api——支援文字對話、串流輸出、工具呼叫，Gemini 模型和 API 管理設定的第三方模型均可使用；串流事件嚴格遵循官方協議順序（修正了參考實現已知會漏發的兩個關鍵事件：`response.output_text.done` / `response.function_call_arguments.done`）；不支援伺服器端多輪狀態（`previous_response_id` 會明確報錯而非假裝續上），因為 Codex CLI 本身會重發完整對話歷史 |
-| 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 管理頁 Gemini 兜底一鍵開關：即時開/關「Gemini→第三方兜底」並持久化（原本只能改 .env 且需重啟）；開關只控制兜底，第三方模型照常直連呼叫、照常在 /v1/models |
 
 ---
 

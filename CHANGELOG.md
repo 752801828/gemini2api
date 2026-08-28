@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [1.6.35] - 2026-08-28
+
+### Fixed
+- 🛠️ **修复「生图意图误判导致客户端工具被静默丢弃」**（影响全部四个协议）：意图检测此前扫描整个拍平后的 prompt 且无词边界，系统提示词、历史消息、甚至**工具执行结果正文**里出现「image / 绘制」等字样就会命中，进而丢掉客户端声明的 tools、并把请求甩到错误处理更差的分支。现改为**只看最后一轮用户消息**（跳过工具结果/附件块）+ 英文词边界与习语排除（`draw a conclusion` 之类不再误判），真实画图请求（`draw a cat` 等）照常识别。
+- 🚨 **上游错误不再伪装成正常回答**：Anthropic 流式路径此前把上游失败渲染成一段助手文本并以 `stop_reason: end_turn` 收尾，客户端既不抛异常也无法重试，错误文本还会被写进对话历史。现改为发出标准的 `event: error` 帧并终止。
+- 🚦 **错误状态码映射修正**：`HTTPStatusError` 不是 `RuntimeError` 子类，此前在三个路由里都逃逸成裸 500（还会跳过第三方兜底）。现统一由 `classify_error` 映射：上游 429 → 429 `rate_limit_error`、账号池满/忙 → **529 `overloaded_error` + `Retry-After`**（此前是不可重试的 400）、其它 → 500 / 400。
+- 🌊 **补齐两条漏掉的流式保活**：`/v1/responses` 与 native Gemini 的 **buffered 分支**此前没有心跳（v1.6.31 只覆盖了 real-stream 分支）。Codex 恒带 tools 必走前者；后者更是**首字节零输出**，会被网关首字节超时直接掐断。
+- 🔌 **原生 Gemini 路由现在接受官方 SDK 的 camelCase 报文**：此前 `systemInstruction` / `generationConfig` / `inlineData` 会被静默丢弃（系统提示词与附件直接消失），`functionCall` / `functionResponse` 也不进 prompt。snake_case 写法保持兼容。
+- 🧰 **OpenAI 的 `tool_calls` 不再在拍平时被整体丢弃**，`content: null` 也不再渲染成字面量 `None`；**第三方 Anthropic 转发**补上请求侧格式转换（`role:"tool"` → `tool_result`、`tool_calls` → `tool_use`），工具循环不再第二轮硬失败。
+- 📐 **Anthropic 响应结构对齐规范**：不再发送非标准的 assistant `image` 块（官方 SDK 无此类型，会把图片吞掉），生成的图片改为以 Markdown 形式并入文本；内容块不再携带 `id/name/input/source` 等 null 噪音；`usage` 补上 `cache_creation_input_tokens` / `cache_read_input_tokens` / `service_tier`；流式帧补上 `stop_sequence` / `stop_reason` / `citations`；空回答不再产生空内容块或零长度增量。
+
 ## [1.6.34] - 2026-08-28
 
 ### Fixed

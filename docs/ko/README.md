@@ -60,6 +60,7 @@
 
 | 날짜 | 업데이트 내용 |
 |------|----------|
+| 2026-08-28 17:30:00 | v1.6.35 - 🛠️ 프로토콜 정합성·견고성 대규모 수정: 이미지 의도 오탐으로 **클라이언트 도구가 조용히 삭제**되던 문제(4개 프로토콜 공용), 업스트림 오류가 정상 답변으로 위장되던 문제, `HTTPStatusError`가 맨 500으로 새던 문제(풀 고갈은 529+Retry-After), `/v1/responses`·네이티브 Gemini buffered 분기의 keepalive 누락, 네이티브 Gemini가 공식 SDK camelCase를 거부하던 문제, OpenAI `tool_calls` 유실, 서드파티 Anthropic 전달의 도구 루프 2라운드 실패, Anthropic 응답 구조 정합성 수정 |
 | 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic 프로토콜 세부 정리: 응답에 규격상의 `stop_sequence` 필드 추가 및 5개 언어 API 문서 동기화; 도구 호출 블록의 `name`이 null일 때 Python 리터럴 None으로 렌더링되지 않음; 연결 해제 keepalive 가드에서 예외 회수; 도구 렌더링 형식·연결 해제 취소 테스트 강화 |
 | 2026-08-28 14:20:00 | v1.6.33 - 🔌 Claude Code 연결 오류 수정(issue #10): `system`이 텍스트 블록 배열 형식을 지원하여 422 해소; `tool_use`/`tool_result` 블록이 더 이상 삭제되지 않아 도구 루프 정상 동작; Anthropic 스트리밍을 표준 `event:`+`data:` 2줄 형식으로 변경; Claude buffered 스트림에 keepalive 추가 및 연결 해제 시 계정 슬롯 즉시 반환 |
 | 2026-08-14 22:50:00 | v1.6.32 - 🧠 사고를 프레임 단위로 스트리밍: 네이티브 Gemini의 사고가 생성 중 reasoning_content로 점진적으로 스트리밍되어(/v1/chat/completions) 답변보다 먼저 타이핑 효과로 표시됩니다. 패널의 '답변이 사고보다 먼저' 문제 수정. 마지막 프레임은 전체 사고를 폴백으로 유지. 사고 미사용/일반 채팅은 무회귀 |
@@ -69,7 +70,6 @@
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 gemini-flash-lite 모델 추가: Gemini의 가장 가벼운 Flash-Lite(3.5 Flash-Lite) 등급을 노출하여 Pro/Flash가 사용량 제한에 걸려도 사용 가능한 모델을 선택할 수 있습니다(고정 공개 이름 뒤에서 계정의 실제 모델로 동적 매핑) |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 관리 패널 브랜드 로고 및 파비콘: 좌측 상단 아이콘을 커스텀 브랜드 로고 이미지로 교체(128×128, 약 16KB로 압축, 원본 대비 약 97% 축소); 관리 패널과 로그인 페이지에 브라우저 탭 파비콘 추가(동일 로고 사용) |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 신규 OpenAI Responses API 지원(`/v1/responses` 또는 `/openai/v1/responses`): Chat Completions 대신 최신 Responses 프로토콜을 요구하는 클라이언트(예: 2026년 2월부로 Chat Completions 지원을 중단한 Codex CLI)가 gemini2api와 정상적으로 연동되도록 지원 — 텍스트 대화, 스트리밍, 함수/도구 호출을 Gemini 모델과 API 관리에서 구성한 타사 모델 모두에서 사용 가능; 스트리밍 이벤트는 공식 프로토콜 순서를 엄격히 준수(참조 구현에서 흔히 누락되는 두 개의 종료 이벤트 `response.output_text.done` / `response.function_call_arguments.done`을 수정); 서버 측 멀티턴 상태는 저장하지 않음 — `previous_response_id`는 조용히 이어지는 척하는 대신 명확한 오류를 반환하며, Codex CLI 같은 클라이언트는 전체 대화 히스토리를 직접 재전송함 |
-| 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 관리 페이지 Gemini 폴백 토글: 「Gemini→타사 폴백」을 원클릭으로 즉시 활성화/비활성화하고 영구 저장(.env 수정 및 재시작 불필요); 토글은 폴백만 제어하며, 타사 모델 직접 호출과 /v1/models 노출은 항상 유지 |
 
 ---
 

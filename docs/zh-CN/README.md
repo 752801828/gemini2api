@@ -60,6 +60,7 @@
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-08-28 17:30:00 | v1.6.35 - 🛠️ 协议一致性与健壮性大修：修复生图意图误判导致**客户端工具被静默丢弃**（四协议共用）、上游错误伪装成正常回答、`HTTPStatusError` 逃逸成裸 500（池满改 529+Retry-After）、`/v1/responses` 与 native Gemini buffered 分支缺失的流式保活、原生 Gemini 不认官方 SDK camelCase 报文、OpenAI `tool_calls` 被丢弃、第三方 Anthropic 转发工具循环第二轮硬失败，以及 Anthropic 响应结构对齐（去掉非标准 image 块与 null 噪音） |
 | 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic 协议细节打磨：响应补上规范的 `stop_sequence` 字段并同步五语言 API 文档；工具调用块 name 为 null 时不再渲染成 None；断连保活守卫补异常取回；并加固工具渲染格式与断连取消的测试覆盖 |
 | 2026-08-28 14:20:00 | v1.6.33 - 🔌 修复 Claude Code 无法接入（issue #10）：`system` 支持文本块数组不再 422；`tool_use`/`tool_result` 块不再被丢弃（工具循环可用）；Anthropic 流式改为标准 event+data 两行制；并给 Claude buffered 流式补保活、断连及时归还账号槽位 |
 | 2026-08-14 22:50:00 | v1.6.32 - 🧠 思考内容逐帧流式：原生 Gemini 的思考过程在生成阶段就作为 reasoning_content 逐帧增量流出（/v1/chat/completions），思考先于答案显示、带打字机效果，修复面板「答案早于思考」；收尾仍带完整思考兜底，不开思考/普通对话零回归 |
@@ -69,7 +70,6 @@
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最轻量的 Flash-Lite 档（3.5 Flash-Lite），在 Pro/Flash 被限额时仍有可用模型可选（内部按账号真实模型动态映射，沿用固定公开名） |
 | 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 与 Favicon：左上角图标更换为自定义品牌 Logo 图片（并压缩至 128×128、约 16KB，较原图缩小约 97%）；管理面板与登录页新增浏览器标签页图标（Favicon，使用同一 Logo） |
 | 2026-07-07 12:48:37 | v1.6.26 - 🔌 新增 OpenAI Responses API 支持（`/v1/responses` 或 `/openai/v1/responses`）：让需要新版 Responses 协议的客户端（如 2026 年 2 月起砍掉 Chat Completions 支持的 Codex CLI）能正常接入 gemini2api——支持文本对话、流式输出、工具调用，Gemini 模型和 API 管理配置的第三方模型均可使用；流式事件严格遵循官方协议顺序（修正了参考实现已知会漏发的两个关键事件：`response.output_text.done` / `response.function_call_arguments.done`）；不支持服务端多轮状态（`previous_response_id` 会明确报错而非假装续上），因为 Codex CLI 本身会重发完整对话历史 |
-| 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 管理页 Gemini 兜底一键开关：即时开/关「Gemini→第三方兜底」并持久化（原来只能改 .env 且需重启）；开关只控制兜底，第三方模型照常直连调用、照常在 /v1/models |
 
 ---
 
