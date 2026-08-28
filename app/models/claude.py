@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Any
 
 
@@ -17,10 +17,22 @@ class ClaudeRequest(BaseModel):
     model: str
     max_tokens: int = 4096
     messages: list[ClaudeMessage]
-    system: str | None = None
+    system: str | list | None = None
     stream: bool = False
     tools: list[ClaudeTool] | None = None
     tool_choice: dict | None = None
+
+    @field_validator("system", mode="before")
+    @classmethod
+    def _flatten_system(cls, v):
+        """Anthropic 的 system 允许字符串或文本块数组 [{type:"text",text:...}]（Claude Code 发的是
+        数组，块上可能带 cache_control）。这里在类型校验前把数组拍平成字符串，下游只需处理 str。"""
+        if isinstance(v, list):
+            parts = [b.get("text", "") for b in v
+                     if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+            joined = "\n\n".join(p for p in parts if p)
+            return joined or None
+        return v
 
 
 class ContentBlock(BaseModel):
