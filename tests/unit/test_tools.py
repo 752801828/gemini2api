@@ -39,8 +39,27 @@ class TestImageGenerationIntent:
         assert tools.is_image_generation_intent(text) is False
 
     def test_draw_a_conclusion_is_not_image_intent(self):
-        """曾经的 xfail：'draw a' 子串命中 'draw a conclusion'，已由词边界 + 后随图像名词约束修复。"""
+        """曾经的 xfail：'draw a' 子串命中 'draw a conclusion'，已由词边界 + 习语宾语负向前瞻修复。"""
         assert tools.is_image_generation_intent("please draw a conclusion") is False
+
+    @pytest.mark.parametrize(
+        "text",
+        ["draw a cat", "draw an elephant", "draw a robot in space", "please draw a cat for me"],
+    )
+    def test_draw_a_an_without_image_noun_is_still_image_intent(self, text):
+        """回归守卫：'draw a/an' 后面不跟图像名词（"draw a cat"）也必须命中——这才是最
+        常见的英文生图请求。曾经要求「后随图像名词」的写法会把这些也一并误杀。"""
+        assert tools.is_image_generation_intent(text) is True
+
+
+class TestAsciiIntentReGuard:
+    def test_empty_pattern_table_never_matches_everything(self, monkeypatch):
+        """若关键词表被清空，alts 为空时绝不能退化成 re.compile("")——那会匹配任意
+        字符串，等于把 has_tools 判定打回「全体误判」的老路。"""
+        monkeypatch.setattr(tools, "_IMAGE_INTENT_PATTERNS", ())
+        compiled = tools._build_ascii_intent_re()
+        assert compiled.search("hello world") is None
+        assert compiled.search("") is None
 
 
 class TestMaybeImageGenerationIntent:
@@ -64,6 +83,83 @@ class TestMaybeImageGenerationIntent:
         strict_positive = "generate an image of a fox"
         assert tools.is_image_generation_intent(strict_positive) is True
         assert tools.maybe_image_generation_intent(strict_positive) is True
+
+
+# 修复 "draw a"/"draw an" 的过度收窄（改用负向前瞻）后，_IMG_NOUNS 里为兼容旧版
+# maybe_image_generation_intent 而补的 "draw a"/"draw an" 是否还需要保留？
+# 用 pre-efbdd1d 的裸子串匹配重建期望值，逐例比对现在的 maybe_image_generation_intent。
+_PRE_EFBDD1D_IMG_NOUNS = ("图", "图片", "图像", "海报", "插画", "照片", "壁纸", "logo", "头像", "封面",
+                          "image", "picture", "poster", "photo", "drawing", "illustration",
+                          "wallpaper", "avatar")
+
+
+def _pre_efbdd1d_is_intent(text: str) -> bool:
+    """efbdd1d 之前 is_image_generation_intent 的实现：无词边界的裸子串匹配。
+    关键词表本身自 efbdd1d 起未改一字，所以直接复用 tools._IMAGE_INTENT_PATTERNS。"""
+    if not text:
+        return False
+    return any(p in text.lower() for p in tools._IMAGE_INTENT_PATTERNS)
+
+
+def _pre_efbdd1d_maybe(text: str) -> bool:
+    """efbdd1d 之前 maybe_image_generation_intent 的实现（_IMG_NOUNS 不含 "draw a"/"draw an"）。"""
+    if not text:
+        return False
+    if _pre_efbdd1d_is_intent(text):
+        return True
+    low = text.lower()
+    has_noun = any(n in low for n in _PRE_EFBDD1D_IMG_NOUNS)
+    has_verb = any(v in low for v in tools._IMG_VERBS)
+    return has_noun and has_verb
+
+
+class TestMaybeImageGenerationIntentParity:
+    """FIX 2 的证据：_IMG_NOUNS 里的 "draw a"/"draw an" 是否还需要保留，取决于去掉它
+    是否会让 maybe_image_generation_intent 偏离 efbdd1d 之前的行为。逐例比对下方样本，
+    覆盖「原本的过度收窄」新排除的习语闭集（is_image_generation_intent 现在对它们返回
+    False，但宽松判断在 efbdd1d 之前对它们是 True）——这正是决定保留与否的关键样本。
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # 最常见生图请求（现在严格判断已直接命中，不再依赖 _IMG_NOUNS 里的 "draw a/an"）
+            "draw a cat", "draw an elephant", "draw a robot in space",
+            "draw a picture of a cat", "generate an image of a cat",
+            # 习语闭集：严格判断现在对它们返回 False，宽松判断必须靠 _IMG_NOUNS 里的
+            # "draw a"/"draw an" 才能保持和 efbdd1d 之前一致（True）
+            "please draw a conclusion", "draw an outline of the plan",
+            "we should draw a distinction between the two",
+            "draw a line under this discussion",
+            "let me draw an inference from the logs",
+            "draw a card from the deck", "draw a salary of 50k",
+            "draw a crowd", "draw a map of the region",
+            # 无关文本（两边都应为 False）
+            "今天天气真好", "讲个笑话", "create a plan", "",
+            "画一只猫",
+        ],
+    )
+    def test_current_matches_pre_efbdd1d(self, text):
+        assert tools.maybe_image_generation_intent(text) == _pre_efbdd1d_maybe(text), (
+            f"{text!r}: current={tools.maybe_image_generation_intent(text)} "
+            f"pre-efbdd1d={_pre_efbdd1d_maybe(text)}"
+        )
+
+    def test_reverting_img_nouns_edit_would_break_parity(self, monkeypatch):
+        """反证：把 "draw a"/"draw an" 从 _IMG_NOUNS 里去掉（模拟 revert），习语闭集样本
+        就会偏离 efbdd1d 之前的行为——证明这条 _IMG_NOUNS 边不能删，FIX 2 结论是保留。"""
+        reverted_nouns = tuple(n for n in tools._IMG_NOUNS if n not in ("draw a", "draw an"))
+        monkeypatch.setattr(tools, "_IMG_NOUNS", reverted_nouns)
+
+        idiom_samples = [
+            "please draw a conclusion", "draw an outline of the plan",
+            "we should draw a distinction between the two",
+        ]
+        mismatches = [t for t in idiom_samples
+                     if tools.maybe_image_generation_intent(t) != _pre_efbdd1d_maybe(t)]
+        assert mismatches == idiom_samples, (
+            "预期这些习语样本在去掉 _IMG_NOUNS 的 draw a/an 后会与 efbdd1d 之前的行为不一致"
+        )
 
 
 class TestParseToolResponse:

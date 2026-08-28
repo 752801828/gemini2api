@@ -67,6 +67,14 @@ class TestMatcherStillPositive:
             "帮我画一个 logo",
             "生成一张图",
             "做一张海报",
+            # 曾经的过度修正回归守卫：这四个是英文最常见的生图请求，"draw a/an" 后面
+            # 不跟图像名词也必须命中——之前误把它们和 "draw a conclusion" 这类习语
+            # 混为一谈，导致 has_tools 常年为 True、四个 router 全部注入工具 prompt、
+            # 压制了 Gemini 的生图。绝不能再回归。
+            "draw a cat",
+            "draw an elephant",
+            "draw a robot in space",
+            "please draw a cat for me",
         ],
     )
     def test_genuine_requests_still_detected(self, text):
@@ -147,6 +155,18 @@ class TestLastUserText:
 
     def test_image_block_only_turn_does_not_crash(self):
         msgs = [{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "data": ""}}]}]
+        assert last_user_text(msgs) == ""
+
+    def test_typeless_text_block_falls_back(self):
+        """镜像 build_prompt_from_messages 里的兜底：block 带字符串 "text" 但没有
+        （或带别的）type 字段时也要纳入，否则这类请求永远判不出生图意图。"""
+        msgs = [{"role": "user", "content": [{"text": "draw a picture of a cat"}]}]
+        assert last_user_text(msgs) == "draw a picture of a cat"
+        assert tools.is_image_generation_intent(last_user_text(msgs)) is True
+
+    def test_typeless_fallback_still_excludes_image_blocks(self):
+        """image 块正常没有 "text"；万一出现，也不该被兜底当成用户正文纳入。"""
+        msgs = [{"role": "user", "content": [{"type": "image", "text": TOOL_RESULT_TEXT}]}]
         assert last_user_text(msgs) == ""
 
     @pytest.mark.parametrize("noise", [DOCKERFILE_TEXT, DOCKER_CMD_TEXT, CJK_DOC_TEXT, TOOL_RESULT_TEXT])

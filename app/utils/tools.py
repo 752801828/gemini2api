@@ -26,41 +26,51 @@ _IMAGE_INTENT_PATTERNS = (
 )
 
 
-# 英文图像名词表（取自下方宽松兜底 _IMG_NOUNS 的英文部分，不新增语义）。
-# 只用来给「动词+冠词」型模式补约束，不参与独立匹配。
-_ASCII_IMAGE_NOUNS = ("image", "picture", "photo", "poster", "drawing",
-                      "illustration", "wallpaper", "avatar", "logo")
-_ASCII_NOUN_ALT = "|".join(_ASCII_IMAGE_NOUNS)
+# "draw a" / "draw an" 自身不含图像名词，是纯前缀片段。英文里它绝大多数时候就是在
+# 要图（"draw a cat" / "draw an elephant"），只有一个收窄的习语宾语闭集是例外
+# （"draw a conclusion/distinction/parallel/line/..."）。用负向前瞻排除这个闭集，
+# 而不是反过来要求后随图像名词——后者会把 "draw a cat" 这类最常见的英文生图请求
+# 也一并排除在外，导致 has_tools 常年为 True、四个 router 全部注入工具 prompt、
+# 压制 Gemini 的生图（见 app/routers/openai.py:305 的注释），是本文件曾经出现过的
+# 一次过度修正，务必不要重蹈。
+_DRAW_ARTICLE_IDIOM_OBJECTS = (
+    "conclusion", "conclusions", "distinction", "distinctions", "parallel", "parallels",
+    "line", "lines", "inference", "inferences", "outline", "outlines", "comparison",
+    "comparisons", "analogy", "analogies", "attention", "blank", "blanks", "breath",
+    "card", "cards", "salary", "crowd", "crowds", "map", "maps",
+)
+_DRAW_ARTICLE_RE = (
+    r"\bdraw an?\b(?!\s+(?:" + "|".join(_DRAW_ARTICLE_IDIOM_OBJECTS) + r")\b)"
+)
 
 
 def _build_ascii_intent_re() -> re.Pattern[str]:
     """把英文模式编译成带 \\b 词边界的正则。
     裸子串匹配会在词内命中（"a photo of" 命中 "data photo of-mode"），\\b 挡掉这类噪声。
 
-    另外拆出「以冠词结尾且自身不含图像名词」的模式（"draw a" / "draw an"）：
-    它们只是前缀片段，英文里 "draw a conclusion / draw an outline / draw a
-    distinction / draw a parallel" 全是习语，光加词边界仍会命中。这类模式要求
-    其后（最多隔 2 个词）跟一个图像名词才算要图。
-    代价是 "draw a cat" 这种不带图像名词的说法不再算严格生图意图 —— 相比
-    「静默丢掉客户端 tools」，宁可漏判：漏判只是照常走工具/文本链路。
+    "draw a" / "draw an" 单独处理，见 _DRAW_ARTICLE_RE 上方注释。
+
+    alts 为空（理论上不会发生，除非关键词表被清空）时绝不能 re.compile("")——
+    那会匹配任意字符串，等于把 has_tools 判定又打回「全体误判」的老路。
     """
-    strong, article_tailed = [], []
+    strong = []
+    has_draw_article = False
     for p in _IMAGE_INTENT_PATTERNS:
         if not p.isascii():
             continue
-        has_noun = re.search(rf"\b(?:{_ASCII_NOUN_ALT})\b", p) is not None
-        if not has_noun and re.search(r"\b(?:a|an)$", p):
-            article_tailed.append(re.escape(p))
-        else:
-            strong.append(re.escape(p))
+        if p in ("draw a", "draw an"):
+            has_draw_article = True
+            continue
+        strong.append(re.escape(p))
 
     alts = []
     if strong:
         alts.append(rf"\b(?:{'|'.join(strong)})\b")
-    if article_tailed:
-        alts.append(
-            rf"\b(?:{'|'.join(article_tailed)})\b(?:\s+\w+){{0,2}}?\s+(?:{_ASCII_NOUN_ALT})s?\b"
-        )
+    if has_draw_article:
+        alts.append(_DRAW_ARTICLE_RE)
+
+    if not alts:
+        return re.compile(r"(?!)")  # 永不匹配，安全侧兜底
     return re.compile("|".join(alts))
 
 
@@ -91,11 +101,13 @@ def is_image_generation_intent(text: str) -> bool:
 # 但能兜住关键词没精确覆盖的生图表达，避免漏网走真流式导致图在文字后。
 _IMG_NOUNS = ("图", "图片", "图像", "海报", "插画", "照片", "壁纸", "logo", "头像", "封面",
               "image", "picture", "poster", "photo", "drawing", "illustration", "wallpaper", "avatar",
-              # 严格判断给 "draw a/an" 加了「后随图像名词」的约束（否则 "draw a conclusion" 误判），
-              # 于是 "draw a cat" 不再是严格意图。宽松判断绝不能跟着收窄——它决定生图的加长
-              # POST 超时（180s vs 60s）与 buffered 分流，收窄会让真·生图超时。
-              # 补进这两个短语后，凡含 "draw a/an" 的文本仍必然 has_noun+has_verb=True，
-              # 宽松判断的结果与收窄前逐例一致。
+              # 严格判断（is_image_generation_intent）现在用负向前瞻排除 "draw a
+              # conclusion/distinction/outline/..." 这一小撮习语闭集（见 _DRAW_ARTICLE_RE），
+              # 对这些句子仍返回 False。宽松判断绝不能跟着收窄——它决定生图的加长 POST 超时
+              # （180s vs 60s）与 buffered 分流，误判代价极小（多走 buffered），漏判代价是
+              # 真·生图超时。补进这两个短语后，凡含 "draw a/an" 的文本（包括这些习语句）
+              # has_noun+has_verb 仍必然为 True，宽松判断的结果与 efbdd1d 改动前逐例一致
+              # （证据见 tests/unit/test_tools.py::TestMaybeImageGenerationIntentParity）。
               "draw a", "draw an")
 _IMG_VERBS = ("画", "生成", "绘", "做", "设计", "出", "整", "来", "搞", "弄", "制作", "帮我", "给我",
               "想要", "要", "想", "需要", "求", "来一", "来个", "来张",

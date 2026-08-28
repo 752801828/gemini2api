@@ -28,14 +28,18 @@ def _flatten_tool_result_content(content) -> str:
 
 
 def last_user_text(messages: list[dict]) -> str:
-    """取最后一条 ``role == "user"`` 消息里的纯文本（content 为数组时只取 type=="text" 块）。
+    """取最后一条 ``role == "user"`` 消息里的纯文本。
 
     专供「生图意图」判断使用。判断绝不能用 build_prompt_from_messages 拍平后的整段
     prompt：那里面还有 system 提示词、历史轮次以及 tool_result 正文（如某个工具返回
     "an image of a cat is stored at /tmp"），这些文本里的图片字样并不是用户在要图。
     一旦误判，调用方会把 has_tools 置 False —— 客户端声明的 tools 被静默丢弃。
 
-    刻意跳过 tool_use / tool_result 块：user 轮里的 tool_result 是工具输出，不是用户诉求。
+    content 为数组时，取 type=="text" 的块；另外镜像 build_prompt_from_messages 里的
+    兜底——block 带字符串 "text" 字段但 type 不是 tool_use / tool_result / image 时也纳入
+    （例如某些客户端发送 {"text": "..."} 而不带 type）。刻意跳过 tool_use / tool_result /
+    image 块：user 轮里的 tool_result 是工具输出，不是用户诉求；image 块正常没有 "text"，
+    若出现也不该被当成正文。
     没有 user 消息时返回 ""（意图判断随即为 False，即保留 tools，安全的一侧）。
     """
     for msg in reversed(messages):
@@ -45,9 +49,16 @@ def last_user_text(messages: list[dict]) -> str:
         if isinstance(content, str):
             return content
         if isinstance(content, list):
-            return "\n".join(b["text"] for b in content
-                             if isinstance(b, dict) and b.get("type") == "text"
-                             and isinstance(b.get("text"), str))
+            parts = []
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                text = b.get("text")
+                if b.get("type") == "text" and isinstance(text, str):
+                    parts.append(text)
+                elif b.get("type") not in ("tool_use", "tool_result", "image") and isinstance(text, str):
+                    parts.append(text)
+            return "\n".join(parts)
         return "" if content is None else str(content)
     return ""
 
