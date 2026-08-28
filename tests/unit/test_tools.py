@@ -52,12 +52,15 @@ class TestImageGenerationIntent:
         assert tools.is_image_generation_intent(text) is True
 
 
-class TestR4DrawArticleIdiomTrueAmbiguity:
-    """R4：map/maps、card/cards、line/lines 曾在 _DRAW_ARTICLE_IDIOM_OBJECTS 闭集里，
-    但它们既是习语宾语也是**真实可画之物**，是真歧义——"draw a map of the kingdom"、
-    "draw a card for my friend" 是合理的画图请求，此前却被误判成非图片意图，压制了
-    带 tools 时的生图。宁可误判为要画图也不要漏掉真实请求，与该检测器"宁多勿漏"的
-    既有取向一致，故这三组已移出闭集；其余纯抽象习语宾语不受影响，继续排除。"""
+class TestR4RevertKeepsIdiomsExcluded:
+    """R4 曾经把 map/maps、card/cards、line/lines 移出 _DRAW_ARTICLE_IDIOM_OBJECTS，
+    理由是它们既是习语宾语也是真实可画之物（真歧义）——"draw a map of the kingdom"、
+    "draw a card for my friend" 是合理的画图请求。该改动经线上复核实测证实弊大于利，
+    已回退：is_image_generation_intent 只在客户端声明了 tools 时才有效果，它决定的是
+    要不要压制/丢弃这些 tools。假阳性（习语被误判成生图意图）会让 tools 被静默丢弃、
+    agent 的工具循环无声断掉，没有报错没有日志；假阴性（真实生图请求未被识别）只是
+    这一次生图被压制成文本回复，用户看得见、能立刻换说法重试。两者代价不对称，因此
+    安全方向是排除更多习语而非更少，map/card/line 三组必须留在闭集里。"""
 
     @pytest.mark.parametrize(
         "text",
@@ -65,10 +68,11 @@ class TestR4DrawArticleIdiomTrueAmbiguity:
             "draw a map of the kingdom",
             "draw a card for my friend",
             "draw a line drawing of a cat",
+            "draw a line under this discussion",
         ],
     )
-    def test_ambiguous_but_real_draw_requests_now_detected(self, text):
-        assert tools.is_image_generation_intent(text) is True
+    def test_ambiguous_draw_requests_stay_excluded(self, text):
+        assert tools.is_image_generation_intent(text) is False
 
     @pytest.mark.parametrize(
         "text",
@@ -79,8 +83,8 @@ class TestR4DrawArticleIdiomTrueAmbiguity:
         ],
     )
     def test_purely_abstract_idioms_still_excluded(self, text):
-        """无歧义的纯抽象习语宾语（conclusion/outline/distinction 等）不在移除范围内，
-        必须继续被排除在图片意图之外。"""
+        """无歧义的纯抽象习语宾语（conclusion/outline/distinction 等）本来就在闭集里，
+        不受这次回退影响，继续被排除在图片意图之外。"""
         assert tools.is_image_generation_intent(text) is False
 
 

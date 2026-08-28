@@ -28,24 +28,31 @@ _IMAGE_INTENT_PATTERNS = (
 
 # "draw a" / "draw an" 自身不含图像名词，是纯前缀片段。英文里它绝大多数时候就是在
 # 要图（"draw a cat" / "draw an elephant"），只有一个收窄的习语宾语闭集是例外
-# （"draw a conclusion/distinction/parallel/outline/..."）。用负向前瞻排除这个闭集，
+# （"draw a conclusion/distinction/parallel/line/..."）。用负向前瞻排除这个闭集，
 # 而不是反过来要求后随图像名词——后者会把 "draw a cat" 这类最常见的英文生图请求
 # 也一并排除在外，导致 has_tools 常年为 True、四个 router 全部注入工具 prompt、
 # 压制 Gemini 的生图（见 app/routers/openai.py:305 的注释），是本文件曾经出现过的
 # 一次过度修正，务必不要重蹈。
 #
-# R4：map/maps、card/cards、line/lines 曾经也在这张闭集里，但它们既是习语宾语
-# （"draw a map/parallel"、"draw a card from the deck"、"draw a line"）也是**真实
-# 可画之物**（"draw a map of the kingdom"、"draw a card for my friend"、"draw a
-# line drawing of a cat"），是真歧义。该检测器的既有取向是"宁可误判成要画图，也不
-# 要漏掉真实的生图请求"（has_tools 误判的代价远小于压制掉真实生图意图），故三组
-# 移出闭集；其余纯抽象名词（conclusion/distinction/parallel/inference/outline/
-# comparison/analogy/attention/blank/breath/salary/crowd）无此歧义，继续保留。
+# R4 曾经把 map/maps、card/cards、line/lines 移出这张闭集，理由是它们既是习语宾语
+# 也是真实可画之物（"draw a map of the kingdom"）。该改动已被线上复核实测推翻并
+# 回退——不是审美偏好，是两个判错方向的代价不对称：
+#
+# is_image_generation_intent 只在「客户端声明了 tools」时才有效果——它决定的是要不
+# 要压制/丢弃这些 tools、改走工具模拟。于是：
+#   - 假阳性（习语被误判成生图意图，如 "draw a line under this discussion" 这类
+#     纯习语用法）→ 客户端的 tools 被静默丢弃，agent 的工具循环无声断掉，没有报错、
+#     没有日志，调用方根本不知道发生了什么。SEVERE。
+#   - 假阴性（真实生图请求未被识别成生图意图）→ 工具 prompt 被注入，这一次的生图
+#     可能被压制成文本回复。MILD——用户看得见，换个说法即可重试。
+# 因此安全的方向永远是排除更多习语而非更少，哪怕代价是漏掉"draw a map of the
+# kingdom"这类真·生图请求的召回率。map/card/line 三组必须留在闭集里，请勿再次
+# 移除。
 _DRAW_ARTICLE_IDIOM_OBJECTS = (
     "conclusion", "conclusions", "distinction", "distinctions", "parallel", "parallels",
-    "inference", "inferences", "outline", "outlines", "comparison",
+    "line", "lines", "inference", "inferences", "outline", "outlines", "comparison",
     "comparisons", "analogy", "analogies", "attention", "blank", "blanks", "breath",
-    "salary", "crowd", "crowds",
+    "card", "cards", "salary", "crowd", "crowds", "map", "maps",
 )
 _DRAW_ARTICLE_RE = (
     r"\bdraw an?\b(?!\s+(?:" + "|".join(_DRAW_ARTICLE_IDIOM_OBJECTS) + r")\b)"

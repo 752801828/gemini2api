@@ -38,10 +38,30 @@ class TestMatcherFalsePositives:
             "please draw a conclusion",          # 原 xfail
             "draw an outline of the plan",
             "we should draw a distinction between the two",
+            "draw a line under this discussion",
             "let me draw an inference from the logs",
         ],
     )
     def test_english_idioms_are_not_image_intent(self, text):
+        assert tools.is_image_generation_intent(text) is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "draw a map of the kingdom",
+            "draw a card for my friend",
+            "draw a line drawing of a cat",
+        ],
+    )
+    def test_r4_ambiguous_idioms_stay_excluded(self, text):
+        """R4 一度把 map/card/line 移出习语闭集，理由是它们也是真实可画之物，但该改动
+        已被回退：is_image_generation_intent 只在客户端声明了 tools 时才有效果——它
+        决定的是要不要压制/丢弃这些 tools。假阳性（习语被误判成生图意图）会让 tools
+        被静默丢弃、agent 的工具循环无声断掉，没有报错没有日志；假阴性（真实生图请求
+        未被识别）只是这一次生图被压制成文本回复，用户看得见、能立刻换说法重试。两者
+        代价不对称，所以安全方向是排除更多习语而非更少，即使这意味着牺牲
+        "draw a map of the kingdom" 这类真实生图请求的召回率。见
+        app/utils/tools.py 里 _DRAW_ARTICLE_IDIOM_OBJECTS 上方注释。"""
         assert tools.is_image_generation_intent(text) is False
 
     def test_word_boundary_required(self):
@@ -74,16 +94,6 @@ class TestMatcherStillPositive:
             "draw an elephant",
             "draw a robot in space",
             "please draw a cat for me",
-            # R4：map/card/line 既是习语宾语也是真实可画之物（真歧义）——
-            # "draw a map of the kingdom"/"draw a card for my friend" 是合理的画图请求，
-            # 曾被误判成习语（跟 "draw a conclusion" 混为一谈）而压制生图。宁可误判为
-            # 要画图也不要漏掉真实请求，故这三组已移出习语闭集，包括纯习语用法
-            # （如 "draw a line under this discussion"）也会跟着改判 True——这是已知的
-            # 权衡取舍，不是漏改。
-            "draw a map of the kingdom",
-            "draw a card for my friend",
-            "draw a line drawing of a cat",
-            "draw a line under this discussion",
         ],
     )
     def test_genuine_requests_still_detected(self, text):
@@ -258,6 +268,27 @@ class TestClaudeEndpointKeepsTools:
 
         assert r.status_code == 200, r.text
         assert _TOOLS_MARKER in seen["prompt"]
+
+    def test_review_regression_grep_line_idiom_does_not_drop_tools(self, gem_client, monkeypatch):
+        """R4 回归守卫：审查实测复现的具体场景。最后一轮用户消息里含
+        "draw a line under this discussion" 这个纯习语用法，且客户端声明了 tools。
+        R4 曾把 line 移出闭集，导致这句话被误判成生图意图：tools 被静默丢弃、请求
+        改走生图分支，agent 的工具循环无声断掉，没有报错也没有日志。回退后（line
+        重新回到闭集里）必须仍然保留 tools。"""
+        import app.routers.claude as cl
+        seen = _patch_generate(monkeypatch, cl)
+
+        r = gem_client.post("/v1/messages", json={
+            "model": "gemini-pro", "max_tokens": 100, "tools": _CLAUDE_TOOLS,
+            "messages": [{
+                "role": "user",
+                "content": "In the doc it says 'draw a line under this discussion'. Please grep for it.",
+            }],
+        }, headers=_AUTH)
+
+        assert r.status_code == 200, r.text
+        assert _TOOLS_MARKER in seen["prompt"]     # 工具指令块仍在 → tools 没被丢
+        assert "Bash" in seen["prompt"]
 
     def test_genuine_image_request_still_bypasses_tools(self, gem_client, monkeypatch):
         """反向守卫：真·生图意图仍要跳过工具模拟，否则工具 prompt 会压制生图。"""
