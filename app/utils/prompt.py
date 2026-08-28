@@ -27,6 +27,31 @@ def _flatten_tool_result_content(content) -> str:
     return "" if content is None else str(content)
 
 
+def last_user_text(messages: list[dict]) -> str:
+    """取最后一条 ``role == "user"`` 消息里的纯文本（content 为数组时只取 type=="text" 块）。
+
+    专供「生图意图」判断使用。判断绝不能用 build_prompt_from_messages 拍平后的整段
+    prompt：那里面还有 system 提示词、历史轮次以及 tool_result 正文（如某个工具返回
+    "an image of a cat is stored at /tmp"），这些文本里的图片字样并不是用户在要图。
+    一旦误判，调用方会把 has_tools 置 False —— 客户端声明的 tools 被静默丢弃。
+
+    刻意跳过 tool_use / tool_result 块：user 轮里的 tool_result 是工具输出，不是用户诉求。
+    没有 user 消息时返回 ""（意图判断随即为 False，即保留 tools，安全的一侧）。
+    """
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(b["text"] for b in content
+                             if isinstance(b, dict) and b.get("type") == "text"
+                             and isinstance(b.get("text"), str))
+        return "" if content is None else str(content)
+    return ""
+
+
 def build_prompt_from_messages(messages: list[dict], system: str | None = None,
                                tool_prompt: str | None = None) -> str:
     parts = []

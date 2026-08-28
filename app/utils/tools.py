@@ -26,22 +26,77 @@ _IMAGE_INTENT_PATTERNS = (
 )
 
 
+# 英文图像名词表（取自下方宽松兜底 _IMG_NOUNS 的英文部分，不新增语义）。
+# 只用来给「动词+冠词」型模式补约束，不参与独立匹配。
+_ASCII_IMAGE_NOUNS = ("image", "picture", "photo", "poster", "drawing",
+                      "illustration", "wallpaper", "avatar", "logo")
+_ASCII_NOUN_ALT = "|".join(_ASCII_IMAGE_NOUNS)
+
+
+def _build_ascii_intent_re() -> re.Pattern[str]:
+    """把英文模式编译成带 \\b 词边界的正则。
+    裸子串匹配会在词内命中（"a photo of" 命中 "data photo of-mode"），\\b 挡掉这类噪声。
+
+    另外拆出「以冠词结尾且自身不含图像名词」的模式（"draw a" / "draw an"）：
+    它们只是前缀片段，英文里 "draw a conclusion / draw an outline / draw a
+    distinction / draw a parallel" 全是习语，光加词边界仍会命中。这类模式要求
+    其后（最多隔 2 个词）跟一个图像名词才算要图。
+    代价是 "draw a cat" 这种不带图像名词的说法不再算严格生图意图 —— 相比
+    「静默丢掉客户端 tools」，宁可漏判：漏判只是照常走工具/文本链路。
+    """
+    strong, article_tailed = [], []
+    for p in _IMAGE_INTENT_PATTERNS:
+        if not p.isascii():
+            continue
+        has_noun = re.search(rf"\b(?:{_ASCII_NOUN_ALT})\b", p) is not None
+        if not has_noun and re.search(r"\b(?:a|an)$", p):
+            article_tailed.append(re.escape(p))
+        else:
+            strong.append(re.escape(p))
+
+    alts = []
+    if strong:
+        alts.append(rf"\b(?:{'|'.join(strong)})\b")
+    if article_tailed:
+        alts.append(
+            rf"\b(?:{'|'.join(article_tailed)})\b(?:\s+\w+){{0,2}}?\s+(?:{_ASCII_NOUN_ALT})s?\b"
+        )
+    return re.compile("|".join(alts))
+
+
+_ASCII_INTENT_RE = _build_ascii_intent_re()
+# 中文没有词边界概念，\b 对 CJK 无意义，保持原样的子串匹配。
+_CJK_INTENT_PATTERNS = tuple(p for p in _IMAGE_INTENT_PATTERNS if not p.isascii())
+
+
 def is_image_generation_intent(text: str) -> bool:
     """判断用户消息是否是明确的「生成图片」意图。
     用于：即使请求带 tools（agent 场景），只要是生图意图就跳过工具模拟、直接走生图。
     收窄匹配避免误判：单独的"生成/create/generate"不算，必须是明确的画图/生成图片表达。
+
+    注意：调用方必须只传「最后一轮用户消息」的文本，不能传整段拍平的 prompt —— 后者
+    含 system 提示词、历史轮次与 tool_result 正文，里面的图片字样并不是用户在要图，
+    误判会静默丢掉客户端声明的 tools（见 app/utils/prompt.py:last_user_text）。
     """
     if not text:
         return False
     low = text.lower()
-    return any(p in low for p in _IMAGE_INTENT_PATTERNS)
+    if any(p in low for p in _CJK_INTENT_PATTERNS):
+        return True
+    return bool(_ASCII_INTENT_RE.search(low))
 
 
 # 宽松版：图像名词 + 产出动词的组合。用于「流式分流」兜底——
 # 误判只是让该请求走非流式 buffered（慢一点点），代价极小；
 # 但能兜住关键词没精确覆盖的生图表达，避免漏网走真流式导致图在文字后。
 _IMG_NOUNS = ("图", "图片", "图像", "海报", "插画", "照片", "壁纸", "logo", "头像", "封面",
-              "image", "picture", "poster", "photo", "drawing", "illustration", "wallpaper", "avatar")
+              "image", "picture", "poster", "photo", "drawing", "illustration", "wallpaper", "avatar",
+              # 严格判断给 "draw a/an" 加了「后随图像名词」的约束（否则 "draw a conclusion" 误判），
+              # 于是 "draw a cat" 不再是严格意图。宽松判断绝不能跟着收窄——它决定生图的加长
+              # POST 超时（180s vs 60s）与 buffered 分流，收窄会让真·生图超时。
+              # 补进这两个短语后，凡含 "draw a/an" 的文本仍必然 has_noun+has_verb=True，
+              # 宽松判断的结果与收窄前逐例一致。
+              "draw a", "draw an")
 _IMG_VERBS = ("画", "生成", "绘", "做", "设计", "出", "整", "来", "搞", "弄", "制作", "帮我", "给我",
               "想要", "要", "想", "需要", "求", "来一", "来个", "来张",
               "draw", "generate", "create", "make", "design", "render", "want", "need")

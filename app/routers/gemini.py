@@ -19,7 +19,7 @@ from app.models.gemini import (
     GeminiModelList,
 )
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent
-from app.utils.prompt import build_prompt_from_messages
+from app.utils.prompt import build_prompt_from_messages, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,9 @@ async def generate_content(model: str, req: GeminiRequest, request: Request):
     prompt = build_prompt_from_messages(messages, system=system)
 
     has_tools = False
-    if req.tools and not is_image_generation_intent(prompt):
+    # 生图意图只看最后一轮用户消息：prompt 含 system_instruction 与全部历史轮次，
+    # 拿它判断会误判成生图，从而静默丢掉客户端声明的 functionDeclarations。
+    if req.tools and not is_image_generation_intent(last_user_text(messages)):
         function_declarations = []
         for tool in req.tools:
             if tool.function_declarations:
@@ -232,7 +234,9 @@ async def stream_generate_content(model: str, req: GeminiRequest, request: Reque
     prompt = build_prompt_from_messages(messages, system=system)
 
     has_tools = False
-    if req.tools and not is_image_generation_intent(prompt):
+    # 生图意图只看最后一轮用户消息：prompt 含 system_instruction 与全部历史轮次，
+    # 拿它判断会误判成生图，从而静默丢掉客户端声明的 functionDeclarations。
+    if req.tools and not is_image_generation_intent(last_user_text(messages)):
         function_declarations = []
         for tool in req.tools:
             if tool.function_declarations:

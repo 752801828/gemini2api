@@ -22,7 +22,7 @@ from app.models.openai import (
     ImageGenerationRequest, ImageData, ImageResponse,
 )
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent, maybe_image_generation_intent
-from app.utils.prompt import build_prompt_from_messages, extract_attachments
+from app.utils.prompt import build_prompt_from_messages, extract_attachments, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
 logger = logging.getLogger(__name__)
@@ -304,7 +304,9 @@ async def chat_completions(req: ChatRequest, request: Request):
     has_tools = bool(req.tools)
     # 生图意图优先：即使带 tools（agent 每请求都带），只要是明确生图意图就跳过工具模拟，
     # 直接走生图，否则工具 prompt 会压制 Gemini 的图片生成能力。
-    if has_tools and is_image_generation_intent(prompt):
+    # 只看最后一轮用户消息：prompt 可能是整段历史（含 system 与 tool_result 正文），
+    # 拿它判断会误判成生图并静默丢掉客户端 tools。
+    if has_tools and is_image_generation_intent(last_user_text(messages_raw)):
         has_tools = False
         logger.info("检测到生图意图，跳过工具调用模拟，直接生图")
     if has_tools:

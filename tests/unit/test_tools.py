@@ -38,11 +38,8 @@ class TestImageGenerationIntent:
     def test_negative(self, text):
         assert tools.is_image_generation_intent(text) is False
 
-    @pytest.mark.xfail(
-        reason="P2 已知误判：'draw a' 子串命中 'draw a conclusion'（待词边界修复）",
-        strict=False,
-    )
-    def test_known_false_positive_draw_a_conclusion(self):
+    def test_draw_a_conclusion_is_not_image_intent(self):
+        """曾经的 xfail：'draw a' 子串命中 'draw a conclusion'，已由词边界 + 后随图像名词约束修复。"""
         assert tools.is_image_generation_intent("please draw a conclusion") is False
 
 

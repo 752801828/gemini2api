@@ -16,7 +16,7 @@ from app.models.claude import (
     ClaudeModelInfo, ClaudeModelList,
 )
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent
-from app.utils.prompt import build_prompt_from_messages, extract_attachments
+from app.utils.prompt import build_prompt_from_messages, extract_attachments, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
 logger = logging.getLogger(__name__)
@@ -94,8 +94,10 @@ async def create_message(req: ClaudeRequest, request: Request):
             resolved_model = gem_info.get("base_model") or "gemini-pro"
 
     has_tools = bool(req.tools)
-    # 生图意图优先：带 tools 但明确生图意图时跳过工具模拟，直接生图（否则生图被压制）
-    if has_tools and is_image_generation_intent(prompt):
+    # 生图意图优先：带 tools 但明确生图意图时跳过工具模拟，直接生图（否则生图被压制）。
+    # 只看最后一轮用户消息：整段 prompt 含 system 提示词与 tool_result 正文，
+    # 拿它判断会把引用到的图片字样当成用户要图，从而静默丢掉客户端 tools 并改走真流式。
+    if has_tools and is_image_generation_intent(last_user_text(messages_raw)):
         has_tools = False
         logger.info("检测到生图意图，跳过工具调用模拟，直接生图")
     if has_tools:
