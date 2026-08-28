@@ -1,4 +1,5 @@
 import base64
+import json
 import re
 
 _DATA_URI_RE = re.compile(r"^data:(?P<mime>[^;,]+)(?:;[^,]*)?;base64,(?P<b64>.+)$", re.DOTALL)
@@ -16,6 +17,16 @@ _MIME_EXT = {
 }
 
 
+def _flatten_tool_result_content(content) -> str:
+    """tool_result 的 content 支持字符串或文本块数组两种形态，统一展平成纯文本。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b["text"] for b in content
+                         if isinstance(b, dict) and isinstance(b.get("text"), str))
+    return "" if content is None else str(content)
+
+
 def build_prompt_from_messages(messages: list[dict], system: str | None = None,
                                tool_prompt: str | None = None) -> str:
     parts = []
@@ -29,11 +40,23 @@ def build_prompt_from_messages(messages: list[dict], system: str | None = None,
         if isinstance(content, list):
             text_parts = []
             for block in content:
-                if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                    elif "text" in block:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    if isinstance(block.get("text"), str):
                         text_parts.append(block["text"])
+                elif btype == "tool_use":
+                    args = block.get("input")
+                    try:
+                        args_str = "" if args is None else json.dumps(args, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        args_str = str(args)
+                    text_parts.append(f"[Tool call: {block.get('name', '')}({args_str})]")
+                elif btype == "tool_result":
+                    text_parts.append(f"[Tool result: {_flatten_tool_result_content(block.get('content'))}]")
+                elif isinstance(block.get("text"), str):
+                    text_parts.append(block["text"])
             content = "\n".join(text_parts)
 
         if role == "system":
