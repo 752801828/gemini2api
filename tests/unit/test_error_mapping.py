@@ -1,4 +1,4 @@
-"""Defect ②③ 回归测试：
+"""Defect ②③ 回归测试（+ R2 残余修复）：
 
 ② Claude 真流式失败此前会伪装成 stop_reason=end_turn 的正常回答（content_block_delta 里塞
    "Error: ..." 文本，然后照常走 content_block_stop/message_delta/message_stop 收尾）——官方 SDK
@@ -10,8 +10,15 @@
    （openai.py 还因此绕过了第三方兜底）。且旧的 "retry" in str(e).lower() 状态码映射是死代码：
    account_pool 里三条真实的池耗尽/打满消息都不含 "retry"，池打满因此被误判成不可重试的 400。
    三个路由现在统一复用 app.core.gemini_client.classify_error，且与 ② 的流式错误分类共用同一份。
+
+R2：classify_error 对上游 4xx 的 type 错配——HTTPStatusError(400) 此前返回 "api_error"，
+   语义上 400 应是 "invalid_request_error"（请求侧问题，不该跟 5xx 的 "api_error" 混用）。
+   细化为：429 → rate_limit_error；其余 4xx（含 400/401/403/404）→ invalid_request_error；
+   5xx → api_error。上游状态码透传保持不变，只细化 type。
 """
 import json
+
+import pytest
 
 from app.core.gemini_client import HTTPStatusError, classify_error
 
@@ -32,6 +39,21 @@ def test_classify_http_status_error_other_status_is_api_error():
     status, err_type, retry_after = classify_error(HTTPStatusError(503, "boom"))
     assert (status, err_type) == (503, "api_error")
     assert retry_after is None
+
+
+@pytest.mark.parametrize("status,expected_type", [
+    (400, "invalid_request_error"),
+    (401, "invalid_request_error"),
+    (403, "invalid_request_error"),
+    (404, "invalid_request_error"),
+    (429, "rate_limit_error"),
+    (500, "api_error"),
+    (503, "api_error"),
+])
+def test_classify_http_status_error_type_by_status_r2(status, expected_type):
+    """R2：4xx（含 400）细分成 invalid_request_error，5xx 仍是 api_error；状态码本身透传不变。"""
+    result_status, err_type, _retry_after = classify_error(HTTPStatusError(status, "boom"))
+    assert (result_status, err_type) == (status, expected_type)
 
 
 def test_classify_pool_exhausted_runtime_errors_are_529_with_retry_after():

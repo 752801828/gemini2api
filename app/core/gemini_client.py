@@ -58,7 +58,13 @@ def classify_error(exc: Exception) -> tuple[int, str, int | None]:
     """
     if isinstance(exc, HTTPStatusError):
         status = exc.status_code
-        error_type = "rate_limit_error" if status == 429 else "api_error"
+        if status == 429:
+            error_type = "rate_limit_error"
+        elif 400 <= status < 500:
+            # 4xx 都是请求侧的问题（含 400），不该跟 5xx 混用同一个 api_error。
+            error_type = "invalid_request_error"
+        else:
+            error_type = "api_error"
         return status, error_type, None
     if isinstance(exc, RuntimeError):
         msg = str(exc)

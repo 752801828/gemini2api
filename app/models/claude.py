@@ -42,6 +42,7 @@ class ContentBlock(BaseModel):
     name: str | None = None
     input: dict | None = None
     source: dict | None = None  # type=image 时：{type:"base64",media_type,data}
+    citations: list | None = None  # 仅 text 块：真实 Anthropic API 两侧（流式/非流式）恒发该字段
 
 
 class ClaudeUsage(BaseModel):
@@ -67,8 +68,19 @@ class ClaudeResponse(BaseModel):
     def _serialize_content(self, v: list[ContentBlock]) -> list[dict]:
         """按块类型只发相关字段（真实 API 行为）：text 块不带 id/name/input/source，
         tool_use 块不带 text/source 等。只对内容列表做 exclude_none，绝不整模型
-        exclude_none——那样会连带吞掉顶层 stop_sequence:null（真实 API 恒发该字段）。"""
-        return [b.model_dump(exclude_none=True) for b in v]
+        exclude_none——那样会连带吞掉顶层 stop_sequence:null（真实 API 恒发该字段）。
+
+        R3：text 块的 citations 是例外——真实 Anthropic API 两侧（流式/非流式）text 块
+        恒发 "citations": null，但它跟 id/name/input/source 一样默认是 None，会被上面
+        这行 exclude_none 连带丢掉。这里对 text 块显式补回，其余块类型（tool_use 等）
+        仍然走 exclude_none（不带 citations）。"""
+        out = []
+        for b in v:
+            d = b.model_dump(exclude_none=True)
+            if b.type == "text":
+                d["citations"] = b.citations
+            out.append(d)
+        return out
 
 
 class ClaudeModelInfo(BaseModel):
