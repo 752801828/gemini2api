@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, field_serializer
 from typing import Any
 
 
@@ -47,6 +47,10 @@ class ContentBlock(BaseModel):
 class ClaudeUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
+    # 0 是诚实值：本中转没有 prompt cache，不是伪造非零数字掩盖真实差异。
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    service_tier: str = "standard"
 
 
 class ClaudeResponse(BaseModel):
@@ -58,6 +62,13 @@ class ClaudeResponse(BaseModel):
     stop_reason: str = "end_turn"
     stop_sequence: str | None = None
     usage: ClaudeUsage = Field(default_factory=ClaudeUsage)
+
+    @field_serializer("content")
+    def _serialize_content(self, v: list[ContentBlock]) -> list[dict]:
+        """按块类型只发相关字段（真实 API 行为）：text 块不带 id/name/input/source，
+        tool_use 块不带 text/source 等。只对内容列表做 exclude_none，绝不整模型
+        exclude_none——那样会连带吞掉顶层 stop_sequence:null（真实 API 恒发该字段）。"""
+        return [b.model_dump(exclude_none=True) for b in v]
 
 
 class ClaudeModelInfo(BaseModel):

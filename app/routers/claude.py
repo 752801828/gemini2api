@@ -219,13 +219,19 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
             "role": "assistant",
             "content": [],
             "model": model_name,
-            "usage": {"input_tokens": estimate_tokens(prompt), "output_tokens": 0},
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": estimate_tokens(prompt), "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "service_tier": "standard",
+            },
         },
     })
     yield _claude_sse({
         "type": "content_block_start",
         "index": 0,
-        "content_block": {"type": "text", "text": ""},
+        "content_block": {"type": "text", "text": "", "citations": None},
     })
 
     full_text = ""
@@ -275,8 +281,12 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
     yield _claude_sse({"type": "content_block_stop", "index": 0})
     yield _claude_sse({
         "type": "message_delta",
-        "delta": {"stop_reason": "end_turn"},
-        "usage": {"output_tokens": estimate_tokens(full_text)},
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {
+            "output_tokens": estimate_tokens(full_text),
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            "service_tier": "standard",
+        },
     })
     yield _claude_sse({"type": "message_stop"})
 
@@ -310,7 +320,13 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
             "role": "assistant",
             "content": [],
             "model": model_name,
-            "usage": {"input_tokens": estimate_tokens(prompt), "output_tokens": 0},
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": estimate_tokens(prompt), "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "service_tier": "standard",
+            },
         },
     })
 
@@ -334,8 +350,12 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
 
             yield _claude_sse({
                 "type": "message_delta",
-                "delta": {"stop_reason": "tool_use"},
-                "usage": {"output_tokens": estimate_tokens(text)},
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {
+                    "output_tokens": estimate_tokens(text),
+                    "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                    "service_tier": "standard",
+                },
             })
             yield _claude_sse({"type": "message_stop"})
             return
@@ -344,7 +364,7 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     yield _claude_sse({
         "type": "content_block_start",
         "index": 0,
-        "content_block": {"type": "text", "text": ""},
+        "content_block": {"type": "text", "text": "", "citations": None},
     })
 
     async for word in split_into_chunks(text):
@@ -358,8 +378,12 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
 
     yield _claude_sse({
         "type": "message_delta",
-        "delta": {"stop_reason": "end_turn"},
-        "usage": {"output_tokens": estimate_tokens(text)},
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {
+            "output_tokens": estimate_tokens(text),
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            "service_tier": "standard",
+        },
     })
 
     yield _claude_sse({"type": "message_stop"})
