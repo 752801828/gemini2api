@@ -560,7 +560,7 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                         yield chunk
                     if emitted:
                         return
-                yield _err_chunk(completion_id, model_name, str(e2))
+                yield _err_chunk(e2)
                 return
         else:
             if not streamed_any:
@@ -570,7 +570,7 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                     yield chunk
                 if emitted:
                     return
-            yield _err_chunk(completion_id, model_name, str(e))
+            yield _err_chunk(e)
             return
 
     # Gemini 真流式整条为空（只发过 role 首帧，未流出任何内容）→ 第三方兜底
@@ -609,12 +609,18 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
     yield "data: [DONE]\n\n"
 
 
-def _err_chunk(completion_id: str, model_name: str, msg: str) -> str:
-    chunk = StreamChunk(
-        id=completion_id, model=model_name,
-        choices=[StreamChoice(delta=StreamDelta(content=f"Error: {msg}"), finish_reason="stop")],
-    )
-    return format_sse(chunk.model_dump()) + "data: [DONE]\n\n"
+def _err_chunk(exc: Exception) -> str:
+    """真实上游失败不能伪装成正常回答（与 v1.6.35 在 Claude 侧修的 defect ② 同类，
+    这里补 OpenAI 协议的残留）：此前发 content:"Error: ..." + finish_reason="stop"，
+    官方 SDK 看不到异常，会把错误文本当成模型说的话，client 的重试/故障转移/退避永远
+    不会触发。改发 OpenAI 风格的 error 帧（data 帧带顶层 "error" 键）——openai SDK 的
+    _streaming.py 专门检测这个键并抛 APIError，这才是流式中途报错的正确表达方式。
+    复用与 Claude 侧同一份 classify_error，两个协议对同一类失败给出一致的 type。
+    调用方在此之前已经先尝试过 _maybe_fallback_stream（第三方兜底），本函数只在
+    兜底也未命中时才会被触达；已流出的内容不受影响（不回退已发内容）。"""
+    status, err_type, _retry_after = classify_error(exc)
+    chunk = {"error": {"message": str(exc), "type": err_type, "code": status}}
+    return format_sse(chunk) + "data: [DONE]\n\n"
 
 
 async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, gemini_conv_id: str = "", conv=None, messages_raw=None, model_name: str = "", completion_id: str = "", attachments=None, base_url: str = "", request=None, req=None, gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
@@ -666,7 +672,7 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                     yield chunk
                 if emitted:
                     return
-                yield _err_chunk(completion_id, model_name, str(e2))
+                yield _err_chunk(e2)
                 return
         else:
             emitted = False
@@ -675,7 +681,7 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                 yield chunk
             if emitted:
                 return
-            yield _err_chunk(completion_id, model_name, str(e))
+            yield _err_chunk(e)
             return
 
     # Gemini 返回空响应（无文本、无图）→ 第三方兜底（此前只发过 role 首帧 + keepalive，可安全改流）
