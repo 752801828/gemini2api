@@ -295,6 +295,18 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
             "index": 0,
             "delta": {"type": "text_delta", "text": appended},
         })
+    elif not full_text:
+        # 上游回答真的是空字符串、也没有生图时，此前不发一个 delta——content_block_start
+        # (text:"") 之后直接 content_block_stop，零个 delta。buffered 路径（同一个
+        # defect ⑩）已经用单空格占位补上了这个缺口；这里是真流式侧的对称缺口，客户端遍历
+        # delta 流、假设至少收到一块非空内容的假设一样会被打破。补发一个单空格 delta，
+        # 不改变非空回答/有生图场景（上面 if 分支已经保证非空）的既有行为。
+        full_text = " "
+        yield _claude_sse({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": full_text},
+        })
 
     yield _claude_sse({"type": "content_block_stop", "index": 0})
     yield _claude_sse({
@@ -325,7 +337,12 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     try:
         result = gen_task.result()
     except Exception as e:
-        yield _claude_sse({"type": "error", "error": {"type": "api_error", "message": str(e)}})
+        # 硬编码 "api_error" 会绕开 classify_error 的统一映射（929a049），buffered 流式路径
+        # （Claude Code 走的这条）跟非流式/真流式给出不一致的 error type——同一个 pool-busy
+        # 失败，非流式吐 overloaded_error，这里却吐 api_error，客户端的重试/故障转移策略
+        # 因 type 不同而表现不一致。
+        _, err_type, _retry_after = classify_error(e)
+        yield _claude_sse({"type": "error", "error": {"type": err_type, "message": str(e)}})
         return
 
     text = result.get("text", "")
@@ -384,6 +401,13 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     if gen_images:
         md = _images_to_markdown(gen_images, request)
         text = (md + "\n" + text.strip()) if text.strip() else md
+
+    # 上游回答真的是空字符串时，非流式路径（6cf8ca0）已经改发单空格占位文本块，不再吐
+    # text:"" 的空块；这里是同一个 defect 在流式侧留下的对称缺口——不补的话客户端会拿到
+    # content_block_start(text:"") -> content_block_stop 之间零个 delta，同样违反"遍历
+    # content/delta 假设至少一块非空"的客户端假设。用单空格占位，不改变非空文本的既有行为。
+    if not text:
+        text = " "
 
     yield _claude_sse({
         "type": "content_block_start",

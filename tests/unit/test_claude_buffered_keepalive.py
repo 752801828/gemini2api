@@ -45,6 +45,32 @@ def test_claude_buffered_error_path_unchanged(gem_client, monkeypatch):
     assert "boom" in body and "error" in body
 
 
+def test_claude_buffered_pool_busy_error_type_matches_classify_error(gem_client, monkeypatch):
+    """buffered 流式路径（Claude Code 恒带 tools 时始终走这条）此前把 error 帧的 type
+    硬编码成 "api_error"，跳过了 classify_error 的统一映射（929a049）——同一个 pool-busy
+    失败，非流式吐 overloaded_error，这里却吐 api_error，两者不一致。"""
+    import app.routers.claude as cl
+
+    async def pool_busy(prompt, model, conversation_id="", attachments=None, gem_id=None,
+                        account_id=None, extended_thinking=False):
+        raise RuntimeError("All accounts busy")
+
+    monkeypatch.setattr(cl.gemini_client, "generate", pool_busy)
+    with gem_client.stream("POST", "/v1/messages", json={
+        "model": "gemini-pro", "max_tokens": 100, "stream": True,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"name": "Read", "description": "d", "input_schema": {"type": "object"}}],
+    }, headers=_AUTH) as r:
+        body = "".join(r.iter_text())
+
+    frames = _parse_sse(body)
+    errors = [data for ev, data in frames if ev == "error"]
+    assert len(errors) == 1, f"expected exactly one error frame, got: {frames}"
+    assert errors[0]["error"]["type"] == "overloaded_error", (
+        f"buffered 流式路径与非流式给出不一致的 error type: {errors[0]}"
+    )
+
+
 def test_openai_keepalive_alias_still_exported():
     """回归：openai.py 仍暴露 _sse_keepalive_during（既有源码守卫测试依赖它）。"""
     import app.routers.openai as oai

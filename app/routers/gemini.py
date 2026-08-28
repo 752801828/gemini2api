@@ -21,7 +21,7 @@ from app.models.gemini import (
     GeminiModelList,
 )
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent
-from app.utils.prompt import build_prompt_from_messages, last_user_text
+from app.utils.prompt import build_prompt_from_messages
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,33 @@ def _render_function_response_part(fr: dict) -> str:
         except (TypeError, ValueError):
             resp_str = str(resp)
     return f"[Tool result: {resp_str}]"
+
+
+def _last_user_text_native(contents) -> str:
+    """取 req.contents（未拍平的原生 Gemini Content 列表）中最后一条 role=="user" 的纯文本，
+    只收 part.text，跳过 function_call / function_response / inline_data / file_data。
+
+    专供「生图意图」判断使用，绝不能对 _parse_contents() 拍平后的 messages 调用
+    app.utils.prompt.last_user_text 来做同一件事：_parse_contents 已经把
+    functionResponse 渲染成 "[Tool result: ...]" 文本揉进了同一条消息的 content 字符串
+    里，字符串层面这时已经无法把"用户真正打的字"和"工具结果"分开——工具结果里随便一句
+    "assets/ contains an image of a logo" 就会被 is_image_generation_intent 命中，
+    客户端声明的 functionDeclarations 被静默丢弃。这正是 commit efbdd1d 在 Anthropic/OpenAI
+    router 修过的缺陷，因 2c6172c 给原生 Gemini router 加上 functionResponse 渲染又重新
+    引入了一次。part 类型（text vs function_call/function_response）只有在这一层、
+    也就是还没拍平的 req.contents 上才分辨得出来，所以这个函数必须在这里做，
+    不要为了"复用 last_user_text"或"简化"把这段过滤逻辑合并/删掉。
+
+    与 last_user_text 保持同样的停止语义：找到最后一条 user content 就返回（哪怕它的
+    text 为空——例如整条内容只有 functionResponse），不再往更早的 user 消息回退。
+    没有 user 消息时返回 ""（意图判断随即为 False，即保留 tools，安全的一侧）。
+    """
+    for content in reversed(contents):
+        if content.role != "user":
+            continue
+        texts = [p.text for p in content.parts if isinstance(p.text, str) and p.text]
+        return " ".join(texts)
+    return ""
 
 
 def _parse_contents(contents):
@@ -179,9 +206,10 @@ async def generate_content(model: str, req: GeminiRequest, request: Request):
     prompt = build_prompt_from_messages(messages, system=system)
 
     has_tools = False
-    # 生图意图只看最后一轮用户消息：prompt 含 system_instruction 与全部历史轮次，
-    # 拿它判断会误判成生图，从而静默丢掉客户端声明的 functionDeclarations。
-    if req.tools and not is_image_generation_intent(last_user_text(messages)):
+    # 生图意图只看最后一轮用户消息，且必须在 req.contents（未拍平）这一层取——
+    # messages 已经把 functionResponse 渲染进文本，字符串层面分不清工具结果和用户诉求，
+    # 见 _last_user_text_native 的 docstring。
+    if req.tools and not is_image_generation_intent(_last_user_text_native(req.contents)):
         function_declarations = []
         for tool in req.tools:
             if tool.function_declarations:
@@ -281,9 +309,10 @@ async def stream_generate_content(model: str, req: GeminiRequest, request: Reque
     prompt = build_prompt_from_messages(messages, system=system)
 
     has_tools = False
-    # 生图意图只看最后一轮用户消息：prompt 含 system_instruction 与全部历史轮次，
-    # 拿它判断会误判成生图，从而静默丢掉客户端声明的 functionDeclarations。
-    if req.tools and not is_image_generation_intent(last_user_text(messages)):
+    # 生图意图只看最后一轮用户消息，且必须在 req.contents（未拍平）这一层取——
+    # messages 已经把 functionResponse 渲染进文本，字符串层面分不清工具结果和用户诉求，
+    # 见 _last_user_text_native 的 docstring。
+    if req.tools and not is_image_generation_intent(_last_user_text_native(req.contents)):
         function_declarations = []
         for tool in req.tools:
             if tool.function_declarations:
