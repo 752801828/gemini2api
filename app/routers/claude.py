@@ -16,6 +16,7 @@ from app.models.claude import (
     ClaudeRequest, ClaudeResponse, ContentBlock, ClaudeUsage,
     ClaudeModelInfo, ClaudeModelList,
 )
+from app.routers.openai import _images_to_markdown
 from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent
 from app.utils.prompt import build_prompt_from_messages, extract_attachments, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
@@ -119,7 +120,8 @@ async def create_message(req: ClaudeRequest, request: Request):
 
     if req.stream:
         return StreamingResponse(
-            _stream_claude(prompt, resolved_model, has_tools, attachments, req.model, gem_id, gem_account_id),
+            _stream_claude(prompt, resolved_model, has_tools, attachments, req.model, gem_id, gem_account_id,
+                          request=request),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -162,26 +164,19 @@ async def create_message(req: ClaudeRequest, request: Request):
             )
         text = parsed.get("content", text)
 
-    # AI 生成图片：作为 Claude 原生 image block。图片块排在文字块前面（图在前）。
-    # 优先 url source（本地托管，客户端可渲染），无 id 时降级 base64 source。
-    base = str(request.base_url).rstrip("/")
-    image_blocks = []
-    for im in (result.get("images") or []):
-        if im.get("id") and base:
-            image_blocks.append(ContentBlock(type="image", source={
-                "type": "url", "url": f"{base}/images/{im['id']}",
-            }))
-        else:
-            image_blocks.append(ContentBlock(type="image", source={
-                "type": "base64", "media_type": im.get("mime", "image/png"), "data": im["b64"],
-            }))
-    blocks = list(image_blocks)
-    # 有文字才加文字块（图在前，文字在后；纯生图无描述时不加空块）。
-    # 上游回答真的是空字符串时，不能发一个 text:"" 的空文本块，也不能让 content
+    # AI 生成图片：Anthropic assistant 侧 content-block union 没有 image 成员——真实 SDK
+    # 严格校验会直接报 35 个错误，宽松路径会把它默默转成 text=None 的 TextBlock，
+    # isinstance(block, TextBlock) 的客户端直接崩，按 type 过滤的客户端整块丢弃，两种情况
+    # 下图片都到不了用户手里（defect ⑥）。改用 openai.py 既有做法：图片渲染成 markdown
+    # 嵌进文字块（图在前，文字在后），不单开 image 块。
+    gen_images = result.get("images") or []
+    if gen_images:
+        md = _images_to_markdown(gen_images, request)
+        text = (md + "\n" + text.strip()) if text.strip() else md
+    # 上游回答是空字符串且无图时，不能发一个 text:"" 的空文本块，也不能让 content
     # 整体变成 []（defect ⑩）——两者都有客户端会踩坑（遍历 content 假设至少一块非空）。
     # 用单空格占位，恰好一块，不改变非空/纯空白文本的既有行为。
-    if text.strip() or not image_blocks:
-        blocks.append(ContentBlock(type="text", text=text if text else " "))
+    blocks = [ContentBlock(type="text", text=text if text else " ")]
 
     return ClaudeResponse(
         id=msg_id,
@@ -203,13 +198,14 @@ async def count_tokens(req: ClaudeRequest):
     return {"input_tokens": count}
 
 
-async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=None, display_model: str = "", gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
+async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=None, display_model: str = "", gem_id=None, account_id=None, request=None) -> AsyncGenerator[str, None]:
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     model_name = display_model or model
 
     # 有工具/附件：需完整文本，走非流式收集后切片（零回归）
     if has_tools or attachments:
-        async for sse in _stream_claude_buffered(prompt, model, has_tools, attachments, msg_id, model_name, gem_id, account_id):
+        async for sse in _stream_claude_buffered(prompt, model, has_tools, attachments, msg_id, model_name, gem_id, account_id,
+                                                 request=request):
             yield sse
         return
 
@@ -238,6 +234,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
     })
 
     full_text = ""
+    final_images = []
     try:
         async for _kind, evt in iter_with_keepalive(
             gemini_client.generate_stream(prompt, model, "", attachments,
@@ -270,6 +267,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
                         })
                 else:
                     full_text = final_text
+                final_images = evt.get("images") or []
     except Exception as e:
         # 真实上游失败绝不能伪装成正常回答：不能落回下面的
         # content_block_stop/message_delta(stop_reason=end_turn)/message_stop 正常收尾——
@@ -280,6 +278,23 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
         yield _claude_sse({"type": "content_block_stop", "index": 0})
         yield _claude_sse({"type": "error", "error": {"type": err_type, "message": str(e)}})
         return
+
+    if final_images:
+        # 生成图片只在 final 事件才知道，此时文字已经流出去了，只能追加一条 delta
+        # 补进同一个文本块（index 0）——绝不能单开 image 块把文字块挤出 index 0，
+        # 否则 SDK 客户端会拿到未知 discriminator（defect ⑥）。
+        md = _images_to_markdown(final_images, request)
+        if full_text.strip():
+            appended = "\n" + md
+            full_text = full_text + appended
+        else:
+            appended = md
+            full_text = md
+        yield _claude_sse({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": appended},
+        })
 
     yield _claude_sse({"type": "content_block_stop", "index": 0})
     yield _claude_sse({
@@ -294,7 +309,7 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
     yield _claude_sse({"type": "message_stop"})
 
 
-async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, attachments, msg_id: str, display_model: str = "", gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
+async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, attachments, msg_id: str, display_model: str = "", gem_id=None, account_id=None, request=None) -> AsyncGenerator[str, None]:
     """非流式收集 + 切片：用于有工具调用/附件的场景。"""
     model_name = display_model or model
     gen_task = asyncio.create_task(gemini_client.generate(prompt, model, "", attachments,
@@ -363,6 +378,12 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
             yield _claude_sse({"type": "message_stop"})
             return
         text = parsed.get("content", text)
+
+    # AI 生成图片：同非流式路径，折进文字块的 markdown，不单开 image 块（defect ⑥）。
+    gen_images = result.get("images") or []
+    if gen_images:
+        md = _images_to_markdown(gen_images, request)
+        text = (md + "\n" + text.strip()) if text.strip() else md
 
     yield _claude_sse({
         "type": "content_block_start",
