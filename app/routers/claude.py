@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
+from app.core.gemini_client import HTTPStatusError, classify_error
 from app.core.stream import split_into_chunks, iter_with_keepalive, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.models.claude import (
     ClaudeRequest, ClaudeResponse, ContentBlock, ClaudeUsage,
@@ -126,10 +127,13 @@ async def create_message(req: ClaudeRequest, request: Request):
     try:
         result = await gemini_client.generate(prompt, resolved_model, "", attachments,
                                               gem_id=gem_id, account_id=gem_account_id)
-    except (RuntimeError, ValueError) as e:
+    except (RuntimeError, ValueError, HTTPStatusError) as e:
+        status, err_type, retry_after = classify_error(e)
+        headers = {"Retry-After": str(retry_after)} if retry_after else None
         return JSONResponse(
-            status_code=500 if "retry" in str(e).lower() else 400,
-            content={"type": "error", "error": {"type": "api_error", "message": str(e)}},
+            status_code=status,
+            content={"type": "error", "error": {"type": err_type, "message": str(e)}},
+            headers=headers,
         )
 
     text = result.get("text", "")
@@ -258,11 +262,15 @@ async def _stream_claude(prompt: str, model: str, has_tools: bool, attachments=N
                 else:
                     full_text = final_text
     except Exception as e:
-        yield _claude_sse({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": f"Error: {e}"},
-        })
+        # 真实上游失败绝不能伪装成正常回答：不能落回下面的
+        # content_block_stop/message_delta(stop_reason=end_turn)/message_stop 正常收尾——
+        # 否则官方 SDK 会看到 stop_reason='end_turn' 且没有异常，client 的重试/故障转移/退避
+        # 永远不会触发，错误文本还会被当成模型说的话存进对话历史。改发标准 Anthropic error
+        # 事件并直接结束流，与下面 _stream_claude_buffered 的既有正确写法（第 289-293 行左右）对齐。
+        _, err_type, _retry_after = classify_error(e)
+        yield _claude_sse({"type": "content_block_stop", "index": 0})
+        yield _claude_sse({"type": "error", "error": {"type": err_type, "message": str(e)}})
+        return
 
     yield _claude_sse({"type": "content_block_stop", "index": 0})
     yield _claude_sse({

@@ -13,7 +13,7 @@ from app.core.account_pool import account_pool as gemini_client
 from app.core.api_forwarder import forward_to_provider, open_stream
 from app.core.fallback import fallback_enabled, is_empty_result, get_fallback_entries, openai_data_is_empty
 from app.core.conversation_store import conversation_store
-from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model
+from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model, HTTPStatusError, classify_error
 from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.models.openai import (
     ChatRequest, ChatResponse, Choice, ChoiceMessage,
@@ -331,7 +331,7 @@ async def chat_completions(req: ChatRequest, request: Request):
         result = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
                                               gem_id=gem_id, account_id=gem_account_id,
                                               extended_thinking=extended_thinking)
-    except (RuntimeError, ValueError) as e:
+    except (RuntimeError, ValueError, HTTPStatusError) as e:
         err = e
         result = None
         # 扩展思维链路径失败：先原样退回非思维链重试一次，再走既有兜底（会话过期/第三方）
@@ -341,7 +341,7 @@ async def chat_completions(req: ChatRequest, request: Request):
                 result = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
                                                       gem_id=gem_id, account_id=gem_account_id,
                                                       extended_thinking=False)
-            except (RuntimeError, ValueError) as e2:
+            except (RuntimeError, ValueError, HTTPStatusError) as e2:
                 err = e2
 
         if result is None:
@@ -360,17 +360,23 @@ async def chat_completions(req: ChatRequest, request: Request):
                     fb = await _fallback_result(request, req, messages_raw, resolved_model)
                     if fb is not None:
                         return JSONResponse(content=fb)
+                    status, err_type, retry_after = classify_error(err)
+                    headers = {"Retry-After": str(retry_after)} if retry_after else None
                     return JSONResponse(
-                        status_code=500,
-                        content={"error": {"message": str(err), "type": "api_error"}},
+                        status_code=status,
+                        content={"error": {"message": str(err), "type": err_type}},
+                        headers=headers,
                     )
             else:
                 fb = await _fallback_result(request, req, messages_raw, resolved_model)
                 if fb is not None:
                     return JSONResponse(content=fb)
+                status, err_type, retry_after = classify_error(err)
+                headers = {"Retry-After": str(retry_after)} if retry_after else None
                 return JSONResponse(
-                    status_code=500 if "retry" in str(err).lower() else 400,
-                    content={"error": {"message": str(err), "type": "api_error"}},
+                    status_code=status,
+                    content={"error": {"message": str(err), "type": err_type}},
+                    headers=headers,
                 )
 
     # Gemini 返回空响应（无文本、无图）→ 第三方兜底（开关关闭/无候选时返回 None，零回归）

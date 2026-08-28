@@ -34,6 +34,42 @@ class HTTPStatusError(Exception):
         super().__init__(f"HTTP {status_code}: {text[:200]}")
 
 
+# account_pool.acquire() 抛出的三种"池打满/耗尽"RuntimeError 消息（均为动态拼接，故用子串匹配）。
+# 之前的 "retry" in str(e).lower() 判断是死代码：这三条消息都不含 "retry"，导致池打满被误判成
+# 400（客户端当成不可重试的请求错误），而不是应该重试的 5xx/529。
+_POOL_EXHAUSTED_HINTS = (
+    "No more accounts to failover to",
+    "No available accounts",
+    "All accounts busy",
+)
+
+# 池打满时建议客户端等待的秒数（排队时长无法精确预测，给一个保守的固定值）。
+POOL_EXHAUSTED_RETRY_AFTER = 30
+
+
+def classify_error(exc: Exception) -> tuple[int, str, int | None]:
+    """把 generate()/generate_stream() 抛出的异常统一映射成
+    (http_status, error_type, retry_after_seconds)。
+
+    error_type 用 Anthropic 风格命名（overloaded_error/rate_limit_error/api_error/
+    invalid_request_error）；OpenAI/Gemini 路由各自用自己的错误信封包裹同一个 type 字符串。
+    三个协议路由的非流式错误响应，以及 Claude 真流式的 error 帧，全部复用这一个函数，
+    避免同一类失败在不同入口给出不一致（甚至互相矛盾）的状态码/类型。
+    """
+    if isinstance(exc, HTTPStatusError):
+        status = exc.status_code
+        error_type = "rate_limit_error" if status == 429 else "api_error"
+        return status, error_type, None
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if any(hint in msg for hint in _POOL_EXHAUSTED_HINTS):
+            return 529, "overloaded_error", POOL_EXHAUSTED_RETRY_AFTER
+        return 500, "api_error", None
+    if isinstance(exc, ValueError):
+        return 400, "invalid_request_error", None
+    return 500, "api_error", None
+
+
 GEMINI_APP_URL = "https://gemini.google.com/app"
 GEMINI_HOME_URL = "https://gemini.google.com/?hl=en"
 GEMINI_APP_EN_URL = "https://gemini.google.com/app?hl=en"

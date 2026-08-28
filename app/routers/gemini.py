@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.core.account_pool import account_pool as gemini_client
+from app.core.gemini_client import HTTPStatusError, classify_error
 from app.core.stream import split_into_chunks, iter_with_keepalive
 from app.models.gemini import (
     GeminiRequest,
@@ -149,10 +150,13 @@ async def generate_content(model: str, req: GeminiRequest, request: Request):
     try:
         result = await gemini_client.generate(prompt, model, "", attachments,
                                               gem_id=gem_id, account_id=gem_account_id)
-    except (RuntimeError, ValueError) as e:
+    except (RuntimeError, ValueError, HTTPStatusError) as e:
+        status, err_type, retry_after = classify_error(e)
+        headers = {"Retry-After": str(retry_after)} if retry_after else None
         return JSONResponse(
-            status_code=500 if "retry" in str(e).lower() else 400,
-            content={"error": {"message": str(e), "type": "api_error"}},
+            status_code=status,
+            content={"error": {"message": str(e), "type": err_type}},
+            headers=headers,
         )
 
     response_text = result.get("text", "")
