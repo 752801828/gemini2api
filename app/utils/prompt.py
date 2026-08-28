@@ -71,7 +71,9 @@ def build_prompt_from_messages(messages: list[dict], system: str | None = None,
 
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "")
+        # content 显式为 None（OpenAI 的 assistant + tool_calls 消息常见形态）此前落入
+        # f-string 直接渲染出 Python 字面量 "None"；改为 or "" 兜底成空串。
+        content = msg.get("content") or ""
 
         if isinstance(content, list):
             text_parts = []
@@ -95,6 +97,26 @@ def build_prompt_from_messages(messages: list[dict], system: str | None = None,
                 elif isinstance(block.get("text"), str):
                     text_parts.append(block["text"])
             content = "\n".join(text_parts)
+
+        # OpenAI 的 assistant 消息把工具调用放在同级 tool_calls 字段（而非 content 块里），
+        # 此前完全没有被渲染——模型看到一个 tool 结果却不知道是哪个工具调用产生的。
+        # 渲染格式与上面 Anthropic 的 tool_use 分支保持字面一致：[Tool call: NAME(ARGS_JSON)]。
+        # 注意 OpenAI 的 function.arguments 本身已经是 JSON 字符串，不能再 json.dumps 一次。
+        tool_calls = msg.get("tool_calls")
+        if isinstance(tool_calls, list):
+            call_parts = []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function")
+                if not isinstance(fn, dict):
+                    fn = {}
+                name = fn.get("name") or ""
+                args = fn.get("arguments")
+                args_str = args if isinstance(args, str) else ("" if args is None else str(args))
+                call_parts.append(f"[Tool call: {name}({args_str})]")
+            if call_parts:
+                content = "\n".join([content, *call_parts]) if content else "\n".join(call_parts)
 
         if role == "system":
             parts.append(f"System: {content}")

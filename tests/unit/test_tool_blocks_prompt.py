@@ -210,3 +210,76 @@ def test_tool_result_image_only_content_pins_empty_marker():
             {"type": "tool_result", "tool_use_id": "t1",
              "content": [{"type": "image", "source": {"data": "x"}}]}]}])
     assert p == "Human: [Tool result: ]"
+
+
+# === defect ⑦: OpenAI tool_calls 此前被整体丢弃，content:null 渲染出 Python 字面量 "None" ===
+
+def test_openai_tool_roundtrip_survives_into_prompt():
+    """还原 bug 报告里的确切场景：assistant content=None + tool_calls，随后一条
+    role=tool 的结果消息。此前展平成 'Human: read foo.py\\n\\nAssistant: None\\n\\n
+    Tool result: print(1)' —— content=None 被渲染成字面量 "None"，且 tool_calls 整体
+    消失，模型看到一个工具结果却不知道是哪个工具调用产生的。"""
+    messages = [
+        {"role": "user", "content": "read foo.py"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "read_file", "arguments": '{"path": "foo.py"}'}}]},
+        {"role": "tool", "content": "print(1)"},
+    ]
+    p = build_prompt_from_messages(messages)
+    assert "None" not in p
+    assert '[Tool call: read_file({"path": "foo.py"})]' in p
+    assert "print(1)" in p
+
+
+def test_openai_tool_call_exact_format():
+    """"[Tool call: NAME(ARGS_JSON)]" 与 Anthropic tool_use 分支字面一致——精确断言防措辞漂移。"""
+    p = build_prompt_from_messages(
+        [{"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "Read", "arguments": '{"file_path": "foo.py"}'}}]}])
+    assert p == 'Assistant: [Tool call: Read({"file_path": "foo.py"})]'
+
+
+def test_openai_tool_calls_arguments_not_double_encoded():
+    """function.arguments 已经是 JSON 字符串，绝不能再 json.dumps 一次（那样会把引号转义成
+    \\" 并把整个 JSON 包成外层字符串字面量）。"""
+    p = build_prompt_from_messages(
+        [{"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c", "type": "function", "function": {"name": "f", "arguments": '{"a": 1}'}}]}])
+    assert '[Tool call: f({"a": 1})]' in p
+    assert '\\"a\\"' not in p
+
+
+def test_openai_content_none_without_tool_calls_renders_empty():
+    """(a) 独立钉住：content 显式为 None 且没有 tool_calls 时渲染成空串，不是字面量 "None"。"""
+    p = build_prompt_from_messages([{"role": "assistant", "content": None}])
+    assert p == "Assistant: "
+
+
+def test_openai_multiple_tool_calls_all_rendered():
+    p = build_prompt_from_messages(
+        [{"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+            {"id": "c2", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+        ]}])
+    assert "[Tool call: a({})]" in p
+    assert "[Tool call: b({})]" in p
+
+
+def test_openai_tool_calls_combine_with_existing_text_content():
+    """assistant 消息 content 是普通文本（非 null）且同时带 tool_calls：文本与工具调用都要保留。"""
+    p = build_prompt_from_messages(
+        [{"role": "assistant", "content": "I'll read it.", "tool_calls": [
+            {"id": "c", "type": "function", "function": {"name": "Read", "arguments": "{}"}}]}])
+    assert p == "Assistant: I'll read it.\n[Tool call: Read({})]"
+
+
+def test_openai_tool_calls_non_list_or_malformed_entries_ignored_no_crash():
+    """tool_calls 非列表、或列表里混入非 dict / function 非 dict 的畸形条目：不抛异常，安全跳过。"""
+    p = build_prompt_from_messages([{"role": "assistant", "content": "hi", "tool_calls": "not-a-list"}])
+    assert p == "Assistant: hi"
+    p2 = build_prompt_from_messages(
+        [{"role": "assistant", "content": "hi", "tool_calls": ["not-a-dict", {"function": "not-a-dict-either"}]}])
+    # "not-a-dict" 整条被跳过；第二条 function 非 dict 时兜底成空 name/空 args
+    assert p2 == "Assistant: hi\n[Tool call: ()]"
