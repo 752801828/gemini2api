@@ -50,6 +50,7 @@ EDITABLE_FIELDS = {
     "chat_cleanup_interval_hours",
     "chat_cleanup_skip_pinned",
     "extended_thinking_enabled",
+    "log_bodies_enabled",
 }
 
 # Type mapping for validation
@@ -73,6 +74,7 @@ FIELD_TYPES = {
     "chat_cleanup_interval_hours": float,
     "chat_cleanup_skip_pinned": bool,
     "extended_thinking_enabled": bool,
+    "log_bodies_enabled": bool,
 }
 
 
@@ -84,6 +86,9 @@ class SettingsResponse(BaseModel):
     account_management: Dict[str, Any] = Field(description="Account rotation settings")
     usage_stats: Dict[str, Any] = Field(description="Usage statistics settings")
     chat_cleanup: Dict[str, Any] = Field(default_factory=dict, description="Web chat auto-cleanup settings")
+    # 新增分组必须在此显式声明：pydantic 默认 extra="ignore"，且路由声明了
+    # response_model=SettingsResponse，未声明的分组会被静默丢弃（面板永远看不到该开关）。
+    logging: Dict[str, Any] = Field(default_factory=dict, description="Request/response body logging settings")
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -131,6 +136,9 @@ def _get_grouped_settings() -> Dict[str, Dict[str, Any]]:
             "chat_cleanup_interval_hours": settings.chat_cleanup_interval_hours,
             "chat_cleanup_skip_pinned": settings.chat_cleanup_skip_pinned,
             "extended_thinking_enabled": settings.extended_thinking_enabled,
+        },
+        "logging": {
+            "log_bodies_enabled": settings.log_bodies_enabled,
         },
     }
 

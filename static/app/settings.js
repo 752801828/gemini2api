@@ -18,7 +18,8 @@ function getGroupTitle(groupKey) {
     health_check: 'settings.group.healthCheck',
     account_management: 'settings.group.accounts',
     usage_stats: 'settings.group.stats',
-    chat_cleanup: 'settings.group.chatCleanup'
+    chat_cleanup: 'settings.group.chatCleanup',
+    logging: 'settings.group.logging'
   };
   return t(map[groupKey] || groupKey);
 }
@@ -29,7 +30,8 @@ const GROUP_ICONS = {
   health_check: 'fa-heartbeat',
   account_management: 'fa-users-cog',
   usage_stats: 'fa-chart-line',
-  chat_cleanup: 'fa-broom'
+  chat_cleanup: 'fa-broom',
+  logging: 'fa-file-alt'
 };
 
 function getFieldLabel(key) {
@@ -50,9 +52,20 @@ function getFieldLabel(key) {
     chat_cleanup_enabled: 'settings.field.chatCleanupEnabled',
     chat_cleanup_keep_hours: 'settings.field.chatCleanupKeepHours',
     chat_cleanup_interval_hours: 'settings.field.chatCleanupInterval',
-    chat_cleanup_skip_pinned: 'settings.field.chatCleanupSkipPinned'
+    chat_cleanup_skip_pinned: 'settings.field.chatCleanupSkipPinned',
+    log_bodies_enabled: 'settings.field.logBodiesEnabled'
   };
   return map[key] ? (map[key].startsWith('settings.') ? t(map[key]) : map[key]) : key;
+}
+
+// 字段级补充说明（可选）。只有出现在这里的字段才会多渲染一行提示，
+// 未登记的字段渲染结果与之前逐字节一致。
+const FIELD_HINTS = {
+  log_bodies_enabled: 'settings.hint.logBodies'
+};
+
+function getFieldHint(key) {
+  return FIELD_HINTS[key] ? t(FIELD_HINTS[key]) : '';
 }
 
 const ROTATION_OPTIONS = [
@@ -106,7 +119,9 @@ function renderSettings(settings) {
       const label = getFieldLabel(key);
       const fullKey = groupKey + '.' + key;
       const input = createFieldInput(fullKey, value);
-      html += '<div class="setting-field"><label>' + label + '</label>' + input + '</div>';
+      const hint = getFieldHint(key);
+      html += '<div class="setting-field"><label>' + label + '</label>' + input +
+        (hint ? '<small class="form-hint">' + escapeHtml(hint) + '</small>' : '') + '</div>';
     }
 
     html += '</div></div>';
