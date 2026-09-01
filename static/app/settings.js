@@ -75,6 +75,20 @@ const ROTATION_OPTIONS = [
   { value: 'failover', labelKey: 'settings.strategy.failover' }
 ];
 
+// 后端 app/core/settings_overrides.py 的 FIELD_TYPES 里声明为 float 的字段。
+// 必须按字段名判定，不能按"当前值是不是整数"猜：JSON 没有 int/float 之分，后端的
+// 24.0 到了 JS 就是 24，Number.isInteger(24) 为真 —— 默认部署下永远猜成整数字段，
+// step 永远是 1，0.5 依旧被 parseInt 截断成 0。tests/unit/test_settings_float_fields.py
+// 有守卫断言本集合与后端 FIELD_TYPES 完全一致，后端加了新 float 字段这里不跟就会红。
+const FLOAT_FIELDS = new Set([
+  'chat_cleanup_keep_hours',
+  'chat_cleanup_interval_hours'
+]);
+
+function isFloatField(key) {
+  return FLOAT_FIELDS.has(String(key).split('.').pop());
+}
+
 function createFieldInput(key, value) {
   const type = typeof value;
 
@@ -100,7 +114,7 @@ function createFieldInput(key, value) {
     // step 既是给浏览器的输入约束，也是 collectFormValues 判断该用 parseInt 还是
     // parseFloat 的依据：后端把 chat_cleanup_* 声明为 float，允许 0.5 这样的小时数，
     // 一律 parseInt 会把它静默截断成 0。整数字段仍是 step=1，行为与之前完全一致。
-    const step = Number.isInteger(value) ? '1' : 'any';
+    const step = isFloatField(key) ? 'any' : '1';
     return `<input type="number" class="form-control" data-key="${key}" step="${step}" value="${value}">`;
   }
 
@@ -272,9 +286,11 @@ function collectFormValues() {
     if (input.type === 'checkbox') {
       value = input.checked;
     } else if (input.type === 'number') {
-      // step="any" 的字段（后端声明为 float）必须用 parseFloat，否则 0.5 会被截断成 0
-      // 并连带整个保存请求一起被后端拒掉。
-      value = input.step === 'any' ? parseFloat(input.value) : parseInt(input.value, 10);
+      // 后端声明为 float 的字段必须用 parseFloat，否则 0.5 会被截断成 0：0 能通过
+      // ">= 0" 的取值域校验，于是静默保存成 0 并落进 settings-overrides.json（优先级
+      // 高于环境变量），面板显示 0 而运行时被 max(1.0, x) 兜成 1 小时 —— 一个设置项
+      // 三个值，还不报错。判定同样按字段名走，不看 input.step（DOM 可能被改）。
+      value = isFloatField(key) ? parseFloat(input.value) : parseInt(input.value, 10);
     } else {
       value = input.value;
     }
