@@ -44,6 +44,14 @@ logging.getLogger("app").setLevel(log_level)
 logger = logging.getLogger(__name__)
 
 
+async def _flush_log_store(log_store) -> None:
+    """LogStore.flush() 是同步的全量 json.dumps + write_text，即使 issue #10 followup
+    F1a 把 body 从落盘内容里剥掉了，2000 条记录的全量重写仍有实打实的 CPU/IO 开销。
+    log_flush_loop 每 10 秒调一次、跑在事件循环上，同步调用会让整个代理卡顿一截——
+    丢进线程池，不阻塞事件循环（issue #10 followup F1b）。"""
+    await asyncio.to_thread(log_store.flush)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
@@ -58,7 +66,7 @@ async def lifespan(app: FastAPI):
     async def log_flush_loop():
         while True:
             await asyncio.sleep(10)
-            app.state.log_store.flush()
+            await _flush_log_store(app.state.log_store)
 
     log_flush_task = asyncio.create_task(log_flush_loop())
 
@@ -219,7 +227,7 @@ def _scrub_sensitive(text: str) -> str:
 #   2. **绝不缓冲流式响应体** —— 只记一个短标记。缓冲 SSE/NDJSON 等于把流式变非流式，
 #      客户端会一直等到上游结束才收到第一个字节，是比"日志不全"严重得多的事故。
 #   3. 只记 body，**不记任何请求头** —— Authorization / Cookie 等凭据永不进日志。
-LOG_BODY_MAX_BYTES = 32 * 1024          # 入库上限，超出截断并标注
+LOG_BODY_MAX_BYTES = 4 * 1024           # 入库上限（原 32KB，issue #10 followup F1c 收窄），超出截断并标注
 LOG_BODY_CAPTURE_LIMIT = 1024 * 1024    # 超过这个大小干脆不读（生图 base64 等）
 _STREAMING_NOT_CAPTURED = {"_note": "streaming response not captured"}
 # gemini 的流式端点用 media_type="application/json"（NDJSON 流），content-type 认不出来，
@@ -264,10 +272,20 @@ async def _capture_response_body(response):
     只在已判定为非流式时调用。BaseHTTPMiddleware 的 call_next 一律返回带
     body_iterator 的包装响应（连 JSONResponse 也是），所以必须读迭代器再重建。
     重建时直接搬 raw_headers，保留重复头（CORS 的 vary 等）与 content-length 原样。
+
+    异常安全（issue #10 followup F3）：body_iterator 一旦被排空就回不去了——排空之后
+    重建响应必须**无条件**发生，绝不能让"把 body 序列化成日志用 dict"这一步的任何异常
+    捎带把重建也跳过，否则客户端会拿到一个 Content-Length 仍在、却零字节的 200。
+    所以 `_body_for_log` 单独包一层 try/except，失败只丢一条 log 字段，绝不影响 response。
     """
     body_iterator = getattr(response, "body_iterator", None)
     if body_iterator is None:
-        return response, _body_for_log(getattr(response, "body", None))
+        try:
+            body_dict = _body_for_log(getattr(response, "body", None))
+        except Exception as e:
+            logger.warning(f"[log_bodies] 记录响应体失败，已跳过（响应不受影响）: {e}")
+            body_dict = None
+        return response, body_dict
     try:
         content_length = int(response.headers.get("content-length") or 0)
     except (TypeError, ValueError):
@@ -277,10 +295,16 @@ async def _capture_response_body(response):
 
     chunks = [chunk async for chunk in body_iterator]
     raw = b"".join(bytes(c) for c in chunks)
+    # 重建必须先于任何可能失败的步骤完成——见上面 docstring。
     rebuilt = Response(content=raw, status_code=response.status_code)
     rebuilt.raw_headers = list(response.raw_headers)
     rebuilt.background = response.background
-    return rebuilt, _body_for_log(raw)
+    try:
+        body_dict = _body_for_log(raw)
+    except Exception as e:
+        logger.warning(f"[log_bodies] 记录响应体失败，已跳过（响应不受影响）: {e}")
+        body_dict = None
+    return rebuilt, body_dict
 
 
 @app.middleware("http")

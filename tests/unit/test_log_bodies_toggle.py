@@ -233,3 +233,70 @@ def test_captured_bodies_survive_to_dict(log_client, app_main, monkeypatch):
     d = store.last.to_dict()
     assert d["request"]["messages"][0]["content"] == "PROMPT_MARKER"
     assert d["response"]["choices"][0]["message"]["content"] == "DETAIL_MARKER"
+
+
+# ---------------------------------------------------------------------------
+# 6. issue #10 followup F1：32KB → 4KB 上限 + flush 离线程（F1c/F1b）
+# ---------------------------------------------------------------------------
+
+def test_log_body_max_bytes_reduced_to_4kb(app_main):
+    """F1(c)：审计实测 32KB body * 2000 条会把 flush() 从 56ms/0.6MB 拖到 4.3s+/119MB；
+    收窄到 4KB 把单条记录的最坏开销压到可接受范围。"""
+    assert app_main.LOG_BODY_MAX_BYTES == 4 * 1024
+
+
+def test_flush_log_store_runs_off_the_event_loop_thread():
+    """F1(b)：log_flush_loop 每 10 秒调一次，同步 flush() 会卡住事件循环；
+    必须用 asyncio.to_thread 丢进线程池执行。"""
+    import asyncio
+    import threading
+
+    from app import main as app_main
+
+    calls = {"thread": None}
+
+    class _Store:
+        def flush(self):
+            calls["thread"] = threading.current_thread()
+
+    asyncio.run(app_main._flush_log_store(_Store()))
+
+    assert calls["thread"] is not None
+    assert calls["thread"] is not threading.main_thread()
+
+
+# ---------------------------------------------------------------------------
+# 7. issue #10 followup F3：捕获响应体失败绝不能让客户端拿到截断/空响应
+# ---------------------------------------------------------------------------
+
+def test_capture_failure_after_drain_does_not_truncate_response(log_client, app_main, monkeypatch):
+    """强制在「body_iterator 已排空之后」的序列化阶段抛异常：客户端必须仍拿到完整、
+    未被破坏的原始响应体；日志记录里对应字段跳过即可，绝不能拖累响应本身。"""
+    import app.main as main_mod
+    import app.routers.openai as oai
+
+    client, store = log_client
+    _enable(monkeypatch, app_main)
+    monkeypatch.setattr(oai.gemini_client, "generate", _fake_generate("ANSWER_MARKER"))
+
+    orig_body_for_log = main_mod._body_for_log
+    calls = {"n": 0}
+
+    def flaky(raw):
+        calls["n"] += 1
+        # 第 1 次调用是中间件里的请求体捕获（发生在 body_iterator 排空之前，不是本次要测的场景）；
+        # 第 2 次调用是 _capture_response_body 里对已排空 chunks 的序列化——这里才是 F3 的目标窗口。
+        if calls["n"] >= 2:
+            raise RuntimeError("simulated failure serializing drained response body")
+        return orig_body_for_log(raw)
+
+    monkeypatch.setattr(main_mod, "_body_for_log", flaky)
+
+    r = client.post("/v1/chat/completions", json=_OPENAI_BODY, headers=_AUTH)
+
+    assert r.status_code == 200
+    # 响应体必须完整送达，不能因为日志序列化失败而被截断成空包
+    assert r.json()["choices"][0]["message"]["content"] == "ANSWER_MARKER"
+    assert calls["n"] >= 2
+    # 日志记录里的 response 字段允许跳过（None），但绝不能影响上面对响应体的断言
+    assert store.last.response is None

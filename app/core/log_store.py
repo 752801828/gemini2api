@@ -75,7 +75,17 @@ class LogStore:
         if not self._dirty:
             return
         with self._lock:
-            data = [r.to_dict() for r in self._buffer]
+            # 落盘绝不带 request/response body（issue #10 followup F1a）：
+            # 1) 隐私——用户完整提示词不该躺在 data/logs.json 里；
+            # 2) 体积/性能——2000 条 * 32KB body 能把这次 write_text 从 0.6MB/56ms
+            #    拖成 119MB/4s+，而 flush 是每 10s 跑一次的定时任务。
+            # 内存里的 buffer（面板详情视图读的就是它）完全不受影响，body 仍在。
+            data = []
+            for r in self._buffer:
+                d = r.to_dict()
+                d["request"] = None
+                d["response"] = None
+                data.append(d)
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
             self._persist_path.write_text(
