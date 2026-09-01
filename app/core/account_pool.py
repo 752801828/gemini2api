@@ -14,6 +14,11 @@ from app.utils.atomic_io import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+# 自愈（reload_cookies）失败后的冷却秒数（issue #11 F2）。账号真的死了（cookie 被 Google
+# 吊销、要人工换号）时，避免每个请求都去打一次 RotateCookies —— 既拖慢每个请求，
+# 又平白抬高对 Google 的敲门频率（风控面）。
+HEAL_RETRY_COOLDOWN = 60.0
+
 
 def _is_5xx(exc: Exception) -> bool:
     """判断异常是否为 5xx（含 Google 503 限流），这类可换账号 failover 重试。"""
@@ -62,6 +67,11 @@ class Account:
     last_error: str = ""
     # 被 5xx/503 限流后的冷却截止时间戳（loop.time()）；冷却期内不优先选，但不算 expired
     cooldown_until: float = 0.0
+    # 会话自愈（reload_cookies）的单飞标志：为真表示已有请求在锁外跑自愈，其余并发请求
+    # 不再重复触发（issue #11 F2）
+    healing: bool = False
+    # 自愈失败后的冷却截止时间戳（loop.time()）；冷却期内不再触发自愈
+    heal_cooldown_until: float = 0.0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     client: GeminiWebClient | None = field(default=None, repr=False)
 
@@ -203,6 +213,54 @@ class AccountPool:
             and a.client is not None and not a.client.is_healthy
         ]
 
+    def _pick_heal_candidate(self) -> Account | None:
+        """挑一个可尝试自愈的账号，并就地打上 healing 单飞标志（需已持有 self._cond 锁）。
+
+        单飞：同一账号同一时刻最多只有一个请求在跑 reload_cookies，其余并发请求直接拿到
+        准确报错，而不是排队陪等一次 60s 级网络 I/O（issue #11 F2）。
+        失败过的账号在 HEAL_RETRY_COOLDOWN 内不再被选中，避免永久失效的账号把每个请求
+        都变成一次对 Google 的 RotateCookies。
+        """
+        now = asyncio.get_event_loop().time()
+        for a in self._unhealthy_active():
+            if a.healing or a.heal_cooldown_until > now:
+                continue
+            a.healing = True
+            return a
+        return None
+
+    async def _try_heal_unhealthy(self, account: Account) -> bool:
+        """对单个「ACTIVE 但会话失效」的账号跑一次 reload_cookies（issue #11 F2）。
+
+        **必须在 self._cond 之外调用**：reload_cookies 会重建 HTTP 会话并访问 Google，
+        超时是 60s 级别；持锁执行会把整个池——包括所有健康账号的请求——一起卡死。
+        调用方须先用 _pick_heal_candidate() 打好 healing 标志；本函数负责清除它。
+
+        用 reload_cookies 而不是 check_account：后者只拿现有 cookie 重读，不会轮换，
+        救不了已经被 Google 轮换掉的 PSIDTS（这正是 issue #11 里"换新 cookie 才恢复"的成因）。
+        """
+        client = account.client
+        ok = False
+        try:
+            if client is not None:
+                result = await client.reload_cookies()
+                ok = bool(result and result.get("success")) and client.is_healthy
+        except Exception as e:
+            logger.warning(f"Account {account.id} self-heal failed: {e}")
+        finally:
+            async with self._cond:
+                account.healing = False
+                if ok:
+                    account.consecutive_failures = 0
+                    logger.info(f"Account {account.id} self-healed: cookies reloaded")
+                    # 多出了可用槽位，唤醒所有排队者重新评估
+                    self._cond.notify_all()
+                else:
+                    account.heal_cooldown_until = (
+                        asyncio.get_event_loop().time() + HEAL_RETRY_COOLDOWN
+                    )
+        return ok
+
     async def _try_recover_expired(self):
         """无可用账号时，尝试恢复 EXPIRED 账号（已持有锁）。"""
         for a in self._accounts:
@@ -219,60 +277,76 @@ class AccountPool:
     async def acquire(self, exclude: set | None = None) -> Account:
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self._acquire_timeout
-        async with self._cond:
-            while True:
-                account = self._find_available(exclude)
-                if account is not None:
-                    account.active_requests += 1
-                    account.last_used = datetime.now(timezone.utc)
-                    return account
-
-                # failover 场景：主动排除了部分账号后没有候选了 → 不排队不救活，
-                # 立即报错让 failover 循环停止（已无其他账号可试）
-                if exclude:
-                    raise RuntimeError("No more accounts to failover to")
-
-                # 没有空闲槽位。区分两种情况：
-                #   ① 有「可用账号」但都满载 → 排队等 release 唤醒（不要跑网络恢复，
-                #      否则高并发满载时每次唤醒都串行跑 check_account 把整个池卡死）
-                #   ② 一个可用账号都没有 → 才尝试救活（网络 I/O，低频路径）
-                # F1（issue #11）：这里的谓词必须与 _find_available() 完全一致——也要求
-                # client.is_healthy。否则 status=ACTIVE 但会话已失效的账号会被当成"只是忙"，
-                # 每个请求都白等满 acquire_timeout(60s) 再报 "All accounts busy"，而实际
-                # 占用槽位是 0；那条 529 是假的，且因为下面的恢复路径永远够不着而变成永久卡死。
-                has_available_account = any(
-                    a.status == AccountStatus.ACTIVE
-                    and a.client is not None and a.client.is_healthy
-                    for a in self._accounts
-                )
-                if not has_available_account:
-                    await self._try_recover_expired()
-                    account = self._find_available()
+        # 每次 acquire 最多触发一次自愈：失败了就按 F3 诚实报错，绝不在这里反复重试自旋。
+        heal_attempted = False
+        while True:
+            heal_target: Account | None = None
+            async with self._cond:
+                while True:
+                    account = self._find_available(exclude)
                     if account is not None:
                         account.active_requests += 1
                         account.last_used = datetime.now(timezone.utc)
                         return account
-                    # F3：区分"没账号可用"和"账号还在但会话失效"。后者槽位全空、排队无意义，
-                    # 必须给出准确文案（classify_error 映射成 503，而不是会诱发无限重试的 529）。
-                    if self._unhealthy_active():
-                        raise RuntimeError(NO_HEALTHY_ACCOUNT_MSG)
-                    # 救不活，且没有 ACTIVE → 排队也没意义，立即报错
-                    raise RuntimeError("No available accounts")
 
-                # 有 ACTIVE 账号但都满载 → 排队等可用槽位，而非直接拒绝
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise RuntimeError(
-                        f"All accounts busy (max_concurrent={self._max_concurrent}), "
-                        f"waited {self._acquire_timeout}s"
+                    # failover 场景：主动排除了部分账号后没有候选了 → 不排队不救活，
+                    # 立即报错让 failover 循环停止（已无其他账号可试）
+                    if exclude:
+                        raise RuntimeError("No more accounts to failover to")
+
+                    # 没有空闲槽位。区分两种情况：
+                    #   ① 有「可用账号」但都满载 → 排队等 release 唤醒（不要跑网络恢复，
+                    #      否则高并发满载时每次唤醒都串行跑 check_account 把整个池卡死）
+                    #   ② 一个可用账号都没有 → 才尝试救活（网络 I/O，低频路径）
+                    # F1（issue #11）：这里的谓词必须与 _find_available() 完全一致——也要求
+                    # client.is_healthy。否则 status=ACTIVE 但会话已失效的账号会被当成"只是忙"，
+                    # 每个请求都白等满 acquire_timeout(60s) 再报 "All accounts busy"，而实际
+                    # 占用槽位是 0；那条 529 是假的，且因为恢复路径永远够不着而变成永久卡死。
+                    has_available_account = any(
+                        a.status == AccountStatus.ACTIVE
+                        and a.client is not None and a.client.is_healthy
+                        for a in self._accounts
                     )
-                try:
-                    await asyncio.wait_for(self._cond.wait(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    raise RuntimeError(
-                        f"All accounts busy (max_concurrent={self._max_concurrent}), "
-                        f"waited {self._acquire_timeout}s"
-                    )
+                    if not has_available_account:
+                        await self._try_recover_expired()
+                        account = self._find_available()
+                        if account is not None:
+                            account.active_requests += 1
+                            account.last_used = datetime.now(timezone.utc)
+                            return account
+                        if self._unhealthy_active():
+                            # F2：ACTIVE 但会话失效 → 先在**锁外**试一次 reload_cookies 自愈。
+                            # 这里只挑目标并打单飞标志，随后 break 出 async with 释放锁再动网络。
+                            if not heal_attempted:
+                                heal_target = self._pick_heal_candidate()
+                                if heal_target is not None:
+                                    break
+                            # 自愈已试过/正被别的请求跑/还在冷却 → F3：给出准确文案，
+                            # 让 classify_error 映射成 503，而不是会诱发无限重试的 529。
+                            raise RuntimeError(NO_HEALTHY_ACCOUNT_MSG)
+                        # 救不活，且没有可用账号 → 排队也没意义，立即报错
+                        raise RuntimeError("No available accounts")
+
+                    # 有可用账号但都满载 → 排队等可用槽位，而非直接拒绝
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise RuntimeError(
+                            f"All accounts busy (max_concurrent={self._max_concurrent}), "
+                            f"waited {self._acquire_timeout}s"
+                        )
+                    try:
+                        await asyncio.wait_for(self._cond.wait(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(
+                            f"All accounts busy (max_concurrent={self._max_concurrent}), "
+                            f"waited {self._acquire_timeout}s"
+                        )
+
+            # ↑ 到这里锁已释放。reload_cookies 是 60s 级网络 I/O，绝不能持锁跑。
+            heal_attempted = True
+            await self._try_heal_unhealthy(heal_target)
+            # 回到外层循环重新取锁、重新 _find_available()：
+            # 自愈成功 → 直接拿到槽位；失败 → 下一轮走上面的 NO_HEALTHY_ACCOUNT_MSG 分支。
 
     async def release(self, account: Account, success: bool, cooldown: bool = False):
         async with self._cond:

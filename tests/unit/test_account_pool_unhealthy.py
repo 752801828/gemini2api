@@ -36,6 +36,10 @@ class _FakeClient:
         self._reload_succeeds = reload_succeeds
         self.reload_calls = 0
         self.generate_calls = 0
+        # 每次进入 reload_cookies 时回调（用于探测调用现场，比如池锁是否被持有）
+        self.on_reload = None
+        # 模拟 reload_cookies 的网络耗时（真实实现是 60s 级超时的网络 I/O）
+        self.reload_delay = 0.0
 
     @property
     def is_healthy(self) -> bool:
@@ -43,6 +47,10 @@ class _FakeClient:
 
     async def reload_cookies(self, psid=None, psidts=None) -> dict:
         self.reload_calls += 1
+        if self.on_reload is not None:
+            self.on_reload()
+        if self.reload_delay:
+            await asyncio.sleep(self.reload_delay)
         if self._reload_succeeds:
             self._healthy = True
             return {"success": True}
@@ -132,6 +140,84 @@ def test_route_reports_session_expired_not_overloaded(gem_client, monkeypatch):
     assert "retry-after" not in {k.lower() for k in r.headers}
     # 不是并发槽位泄漏：请求结束后占用仍为 0
     assert pool.accounts[0].active_requests == 0
+
+
+# ---------------------------------------------------------------------------
+# 测试 3（F2）：自愈可达性
+# ---------------------------------------------------------------------------
+
+def test_unhealthy_account_self_heals_via_reload_cookies_exactly_once():
+    """ACTIVE 但会话失效 + reload_cookies 能成功 → 必须恰好自愈一次并让请求成功。
+    修复前这里是 0 次：acquire 从不把不健康账号交出去，client 内的自愈是死代码。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+    lock_held_during_reload = []
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        # 锁安全探针：reload_cookies 是 60s 级网络 I/O，持池锁调用会卡死所有账号的所有请求
+        client.on_reload = lambda: lock_held_during_reload.append(pool._cond.locked())
+        result = await pool.generate("hi", "gemini-pro")
+        return result, pool.accounts[0]
+
+    result, account = asyncio.run(_run())
+
+    assert client.reload_calls == 1
+    assert client.generate_calls == 1
+    assert result["text"] == "ok"
+    assert account.status == AccountStatus.ACTIVE
+    assert account.active_requests == 0
+    assert lock_held_during_reload == [False], "reload_cookies 绝不能在持有 self._cond 时调用"
+
+
+def test_concurrent_requests_trigger_at_most_one_heal():
+    """单飞：N 个并发请求撞上同一个失效账号，最多只触发一次 reload_cookies（不能是 N 次
+    网络风暴）；没抢到自愈的那些请求立刻拿到准确报错，而不是陪等一次网络 I/O。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+    client.reload_delay = 0.2
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        t0 = time.monotonic()
+        results = await asyncio.gather(
+            *[pool.generate("hi", "gemini-pro") for _ in range(5)],
+            return_exceptions=True,
+        )
+        return results, time.monotonic() - t0, pool.accounts[0]
+
+    results, elapsed, account = asyncio.run(_run())
+
+    assert client.reload_calls == 1, f"自愈被触发了 {client.reload_calls} 次，应当单飞"
+    oks = [r for r in results if isinstance(r, dict)]
+    errs = [r for r in results if isinstance(r, Exception)]
+    assert len(oks) == 1 and len(errs) == 4
+    # 没抢到自愈的请求给的是准确文案，不是假的"忙"
+    assert all(str(e) == NO_HEALTHY_ACCOUNT_MSG for e in errs)
+    assert elapsed < 2.0, f"并发自愈耗时 {elapsed:.2f}s，不应串行叠加"
+    assert account.active_requests == 0
+
+
+def test_failed_heal_does_not_retry_on_every_request():
+    """自愈失败要进冷却：后续请求不能每一个都再打一次 Google（既慢又抬高风控面），
+    且必须立刻报准确错误，不能自旋。"""
+    client = _FakeClient(healthy=False, reload_succeeds=False)
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        msgs = []
+        t0 = time.monotonic()
+        for _ in range(3):
+            with pytest.raises(RuntimeError) as ei:
+                await pool.acquire()
+            msgs.append(str(ei.value))
+        return msgs, time.monotonic() - t0, pool.accounts[0]
+
+    msgs, elapsed, account = asyncio.run(_run())
+
+    assert client.reload_calls == 1, "自愈失败后应进入冷却，不能每个请求都重试一次"
+    assert msgs == [NO_HEALTHY_ACCOUNT_MSG] * 3
+    assert elapsed < 1.0
+    assert account.healing is False
+    assert account.heal_cooldown_until > 0
 
 
 # ---------------------------------------------------------------------------
