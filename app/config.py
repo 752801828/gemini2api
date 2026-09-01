@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 
+from app.core.settings_overrides import apply_overrides
+
 logger = logging.getLogger(__name__)
 
 APP_VERSION = "1.6.38"
@@ -122,6 +124,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# 回放管理面板做过的改动（data/settings-overrides.json），优先级**高于**环境变量。
+# 必须紧跟在 Settings() 之后：account_pool 等模块在 import 期就会读 settings 的值，
+# 放到 lifespan 里回放就晚了。启动日志由 app/main.py 的 lifespan 打印（那时 logging
+# 才配置完），运维排查"改了 .env 为什么不生效"时能一眼看到被覆盖的字段。
+APPLIED_OVERRIDES = apply_overrides(settings)
 
 
 def _persist_api_key():

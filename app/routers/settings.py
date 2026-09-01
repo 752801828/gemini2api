@@ -7,75 +7,23 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.core.account_pool import account_pool, RotationStrategy
-
-# 这些字段语义上是计数/间隔，必须为非负（其中并发上限至少为 1）；用于域校验，
-# 防止把负数/0 等会让服务在下次启动时无法构造 Settings 或行为异常的值写进 .env。
-_NON_NEGATIVE_FIELDS = {
-    "refresh_interval",
-    "max_retries",
-    "rate_limit_window",
-    "rate_limit_max",
-    "health_check_interval",
-    "usage_stats_interval",
-    "usage_stats_retention_days",
-    "chat_cleanup_keep_hours",
-    "chat_cleanup_interval_hours",
-}
-_POSITIVE_FIELDS = {
-    "max_concurrent_per_account",  # 并发上限必须 >= 1
-}
+from app.core.settings_overrides import (
+    EDITABLE_FIELDS,
+    FIELD_TYPES,
+    NON_NEGATIVE_FIELDS as _NON_NEGATIVE_FIELDS,
+    POSITIVE_FIELDS as _POSITIVE_FIELDS,
+    coerce_value,
+    save_overrides,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/settings", tags=["Settings"])
 
-# Whitelist of editable settings
-EDITABLE_FIELDS = {
-    "refresh_interval",
-    "max_retries",
-    "rate_limit_enabled",
-    "rate_limit_window",
-    "rate_limit_max",
-    "health_check_enabled",
-    "health_check_interval",
-    "rotation_strategy",
-    "max_concurrent_per_account",
-    "usage_stats_enabled",
-    "usage_stats_interval",
-    "usage_stats_retention_days",
-    "jitter_enabled",
-    "version_sync_enabled",
-    "chat_cleanup_enabled",
-    "chat_cleanup_keep_hours",
-    "chat_cleanup_interval_hours",
-    "chat_cleanup_skip_pinned",
-    "extended_thinking_enabled",
-    "log_bodies_enabled",
-}
-
-# Type mapping for validation
-FIELD_TYPES = {
-    "refresh_interval": int,
-    "max_retries": int,
-    "rate_limit_enabled": bool,
-    "rate_limit_window": int,
-    "rate_limit_max": int,
-    "health_check_enabled": bool,
-    "health_check_interval": int,
-    "rotation_strategy": str,
-    "max_concurrent_per_account": int,
-    "usage_stats_enabled": bool,
-    "usage_stats_interval": int,
-    "usage_stats_retention_days": int,
-    "jitter_enabled": bool,
-    "version_sync_enabled": bool,
-    "chat_cleanup_enabled": bool,
-    "chat_cleanup_keep_hours": float,
-    "chat_cleanup_interval_hours": float,
-    "chat_cleanup_skip_pinned": bool,
-    "extended_thinking_enabled": bool,
-    "log_bodies_enabled": bool,
-}
+# 白名单 / 类型表 / 取值域集合的唯一真源在 app.core.settings_overrides —— app/config.py
+# 需要在启动时用同一份定义回放持久化的面板改动，而 config 不能反向 import 本路由。
+# 这里保留同名再导出，历史调用方（含测试）仍可 `from app.routers.settings import ...`。
+__all__ = ["router", "EDITABLE_FIELDS", "FIELD_TYPES", "SettingsResponse", "SettingsUpdateRequest"]
 
 
 class SettingsResponse(BaseModel):
@@ -269,26 +217,49 @@ def _validate_settings_domain(updates: Dict[str, Any]) -> None:
             )
 
 
+def _coerce_payload(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """把 JSON 数值收敛到字段声明的类型（主要是 int -> float）。
+
+    JSON 没有 int/float 之分，前端 number 输入取整后 48 会以 int 上线，而
+    chat_cleanup_keep_hours / chat_cleanup_interval_hours 声明是 float。不收敛的话
+    整个保存请求 400，同一次提交里的其它字段（比如隐私开关 log_bodies_enabled）
+    也一起被拒 —— 校验是原子的，用户只看到一个笼统的"保存失败"。
+    非法值不在这里报错，仍交给 _validate_settings_domain 统一给出 400 文案。
+    """
+    coerced = dict(updates)
+    for key, value in updates.items():
+        ok, new_value = coerce_value(key, value)
+        if ok:
+            coerced[key] = new_value
+    return coerced
+
+
 @router.post("", response_model=SettingsResponse)
 async def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
-    """Update application settings. Updates both .env file and in-memory settings."""
+    """Update application settings. Updates the persisted overrides, .env and memory."""
     try:
+        updates = _coerce_payload(request.settings)
+
         # 1) 写盘前完成全部类型 + 取值域校验（包含 rotation_strategy 枚举校验）
-        _validate_settings_domain(request.settings)
+        _validate_settings_domain(updates)
 
         # 2) 先更新内存（含对 account_pool set_strategy/set_max_concurrent 的真实生效），
-        #    成功后才写 .env；失败则回滚内存，保证 .env 不会被写入会 brick 启动的坏值。
-        snapshot = {key: getattr(settings, key) for key in request.settings if hasattr(settings, key)}
+        #    成功后才写盘；失败则回滚内存，保证不会把会 brick 启动的坏值持久化。
+        snapshot = {key: getattr(settings, key) for key in updates if hasattr(settings, key)}
         try:
-            _update_in_memory_settings(request.settings)
+            _update_in_memory_settings(updates)
         except Exception:
             # 回滚已改动的内存值，避免半更新状态
             for key, old in snapshot.items():
                 object.__setattr__(settings, key, old)
             raise
 
-        # 3) 内存更新成功，持久化到 .env
-        _update_env_file(request.settings)
+        # 3) 内存更新成功，持久化。data/settings-overrides.json 才是真正跨重启生效的
+        #    那份（详见 app/core/settings_overrides 模块注释：docker-compose 用 env_file
+        #    注入真实环境变量，压过容器内 .env，且宿主机 .env 根本没挂进容器）。
+        #    .env 仍然照写，保持裸机/源码部署的配置文件可读可改。
+        save_overrides(updates)
+        _update_env_file(updates)
 
         # Return updated settings
         grouped = _get_grouped_settings()

@@ -28,6 +28,16 @@ import pytest
 
 TEST_API_KEY = os.environ["API_KEY"]
 
+# 面板保存会把改动落到 data/settings-overrides.json（相对 CWD，即仓库根），并且
+# app.config 在 import 期就会回放它。测试必须既不读也不写开发者/CI 的真实文件，
+# 所以在任何 `app.*` 被导入之前就把路径重定向到一个临时目录。
+import tempfile  # noqa: E402
+import app.core.settings_overrides as _settings_overrides  # noqa: E402
+
+_settings_overrides.OVERRIDES_PATH = (
+    Path(tempfile.mkdtemp(prefix="g2a-overrides-")) / "settings-overrides.json"
+)
+
 
 @pytest.fixture
 def app_main():

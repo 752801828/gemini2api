@@ -97,7 +97,11 @@ function createFieldInput(key, value) {
   }
 
   if (type === 'number') {
-    return `<input type="number" class="form-control" data-key="${key}" value="${value}">`;
+    // step 既是给浏览器的输入约束，也是 collectFormValues 判断该用 parseInt 还是
+    // parseFloat 的依据：后端把 chat_cleanup_* 声明为 float，允许 0.5 这样的小时数，
+    // 一律 parseInt 会把它静默截断成 0。整数字段仍是 step=1，行为与之前完全一致。
+    const step = Number.isInteger(value) ? '1' : 'any';
+    return `<input type="number" class="form-control" data-key="${key}" step="${step}" value="${value}">`;
   }
 
   return `<input type="text" class="form-control" data-key="${key}" value="${value}">`;
@@ -268,7 +272,9 @@ function collectFormValues() {
     if (input.type === 'checkbox') {
       value = input.checked;
     } else if (input.type === 'number') {
-      value = parseInt(input.value, 10);
+      // step="any" 的字段（后端声明为 float）必须用 parseFloat，否则 0.5 会被截断成 0
+      // 并连带整个保存请求一起被后端拒掉。
+      value = input.step === 'any' ? parseFloat(input.value) : parseInt(input.value, 10);
     } else {
       value = input.value;
     }
