@@ -234,7 +234,19 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
                                              extended_thinking=extended_thinking)
             return r.get("text", "")
 
-        output, _ = await _build_output_items(text, has_tools, _regenerate_for_tools)
+        # 畸形工具 JSON 的重试要再跑一整轮上游 generate()——这条流早就开了（created/
+        # in_progress/keepalive 已发），裸 await 会在已开的连接上制造一次远超单个 keepalive
+        # 间隔的死寂（issue #10 followup F2）。用与上面 gen_task 相同的 task + keepalive 续心跳。
+        build_task = asyncio.create_task(_build_output_items(text, has_tools, _regenerate_for_tools))
+        try:
+            async for ping in sse_keepalive_during(build_task):
+                yield ping
+        except BaseException:          # GeneratorExit / CancelledError on client disconnect
+            build_task.cancel()
+            if build_task.done() and not build_task.cancelled():
+                build_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+            raise
+        output, _ = build_task.result()
         for idx, item in enumerate(output):
             if item["type"] == "function_call":
                 for frame in enc.function_call(item["id"], idx, item["call_id"],

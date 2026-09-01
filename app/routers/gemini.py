@@ -371,7 +371,22 @@ async def stream_generate_content(model: str, req: GeminiRequest, request: Reque
                     _retried["text"] = r.get("text", "")
                     return _retried["text"]
 
-                parsed = await parse_tool_response_with_retry(response_text, _regenerate_for_tools)
+                # 畸形工具 JSON 的重试要再跑一整轮上游 generate()——这条 NDJSON 流早就开了
+                # （上面的空行保活已经发过），裸 await 会制造一次远超单个 keepalive 间隔的
+                # 死寂（issue #10 followup F2）。同上面 gen_task 一样用 task + keepalive 续心跳；
+                # NDJSON 不能用 SSE 注释帧，沿用同款裸换行（丢弃 ping 的实际内容只借它的节奏）。
+                parse_task = asyncio.create_task(
+                    parse_tool_response_with_retry(response_text, _regenerate_for_tools)
+                )
+                try:
+                    async for _ping in sse_keepalive_during(parse_task):
+                        yield "\n"
+                except BaseException:          # GeneratorExit / CancelledError on client disconnect
+                    parse_task.cancel()
+                    if parse_task.done() and not parse_task.cancelled():
+                        parse_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+                    raise
+                parsed = parse_task.result()
                 if isinstance(parsed, dict):
                     response_text = parsed.get("content", _retried.get("text") or response_text)
             async for chunk in split_into_chunks(response_text):

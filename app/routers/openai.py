@@ -718,7 +718,19 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                                              gem_id=gem_id, account_id=account_id)
             return r.get("text", "")
 
-        parsed = await parse_tool_response_with_retry(text, _regenerate_for_tools)
+        # 畸形工具 JSON 的重试要再跑一整轮上游 generate()——这条流早就开了（role 首帧已发），
+        # 裸 await 会在这段已开的连接上制造一次远超单个 keepalive 间隔的死寂（issue #10
+        # followup F2）。用与上面 gen_task 相同的 task + keepalive 套路续上心跳。
+        parse_task = asyncio.create_task(parse_tool_response_with_retry(text, _regenerate_for_tools))
+        try:
+            async for ping in _sse_keepalive_during(parse_task):
+                yield ping
+        except BaseException:          # GeneratorExit / CancelledError on client disconnect
+            parse_task.cancel()
+            if parse_task.done() and not parse_task.cancelled():
+                parse_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+            raise
+        parsed = parse_task.result()
         if parsed["type"] == "tool_calls":
             for tc in parsed["tool_calls"]:
                 call_id = f"call_{uuid.uuid4().hex[:8]}"
