@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [1.6.39] - 2026-09-01
 
 ### Changed
 
@@ -29,15 +29,17 @@
   `Cache-Control: no-cache`（仍保留 ETag，命中即 304）。此前 `index.html` 只给 `app.js` 等挂了 `?v=` 版本串，
   而 `import './settings.js'` 这类裸模块说明符带不上查询串，升级后可能拿到"新 settings.js + 旧 i18n.js"
   的半旧状态，界面直接显示 `settings.field.logBodiesEnabled` 这种原始 i18n 键。
-  裸地址 `/`（管理员实际收藏的入口）同样纳入 —— 它此前会落到 StaticFiles 挂载而拿不到该响应头。
+  裸地址 `/`（管理员实际收藏的入口）同样纳入 —— 它此前会落到 StaticFiles 挂载而拿不到该响应头，GET 与 HEAD 都已覆盖。
 - 🔢 **面板里的小数字段不再被静默截断**：`CHAT_CLEANUP_KEEP_HOURS` / `CHAT_CLEANUP_INTERVAL_HOURS`
   后端声明为 float，但前端一律 `parseInt`，输入 `0.5` 会变成 `0`（`0` 能通过 `>= 0` 校验，于是"保存成功"
   地存成 0，而运行时被 `max(1.0, x)` 兜成 1 小时）。改为按后端字段类型判定 `parseInt` / `parseFloat`。
 - 🛡️ **拒绝 NaN / ±Infinity 写入设置**：二者都是合法 Python float 且 `inf < 0` 为假，会绕过全部取值域校验
   被持久化并每次启动回放；`chat_cleanup_interval_hours=inf` 会让清理循环 `asyncio.sleep(inf)` 永不唤醒。
-- 💾 **设置写盘失败时回滚内存值**：`data/` 或 `.env` 不可写（自定 compose `user:`、rootless podman uid 映射、
-  只读卷）时接口返回 500，但改动此前已在内存生效 —— 管理员看到"保存失败"，隐私开关其实已经切换，
-  重启后又悄悄弹回去。同时 500 的错误详情不再把容器内绝对路径和原子写临时文件名回给浏览器。
+- 💾 **保存设置改为「全有或全无」**：`data/` 或 `.env` 不可写（自定 compose `user:`、rootless podman uid 映射、
+  只读卷）时接口返回 500，但改动此前已经落在内存和优先级最高的覆盖文件里 —— 管理员看到"保存失败"，
+  **隐私开关其实已经被打开，并且会在下次重启时生效**。现在内存 / `data/settings-overrides.json` / `.env`
+  三层中任何一层失败，都会按写入逆序还原全部已完成的步骤（包括删掉本来不存在、刚被创建出来的覆盖文件），
+  接口才返回 500。同时 500 的错误详情不再把容器内绝对路径和原子写临时文件名回给浏览器。
 
 ## [1.6.38] - 2026-09-01
 
