@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -211,6 +211,78 @@ def _scrub_sensitive(text: str) -> str:
     return _SK_SCRUB_RE.sub("sk-****", scrubbed)
 
 
+# ---------------------------------------------------------------------------
+# 完整请求/响应体记录（settings.log_bodies_enabled，默认关）
+# ---------------------------------------------------------------------------
+# 硬约束（勿改）：
+#   1. 开关关闭时这段代码一行都不执行，中间件行为与开关引入前逐字节一致。
+#   2. **绝不缓冲流式响应体** —— 只记一个短标记。缓冲 SSE/NDJSON 等于把流式变非流式，
+#      客户端会一直等到上游结束才收到第一个字节，是比"日志不全"严重得多的事故。
+#   3. 只记 body，**不记任何请求头** —— Authorization / Cookie 等凭据永不进日志。
+LOG_BODY_MAX_BYTES = 32 * 1024          # 入库上限，超出截断并标注
+LOG_BODY_CAPTURE_LIMIT = 1024 * 1024    # 超过这个大小干脆不读（生图 base64 等）
+_STREAMING_NOT_CAPTURED = {"_note": "streaming response not captured"}
+# gemini 的流式端点用 media_type="application/json"（NDJSON 流），content-type 认不出来，
+# 只能靠路径识别；其余流式端点都是 text/event-stream 或带 X-Accel-Buffering: no。
+_STREAMING_PATH_HINTS = (":streamgeneratecontent",)
+
+
+def _body_for_log(raw) -> dict | None:
+    """把一段响应/请求字节体转成可入日志的 dict；超限截断并标注。"""
+    if not raw:
+        return None
+    raw = bytes(raw)
+    if len(raw) > LOG_BODY_MAX_BYTES:
+        return {
+            "_truncated": True,
+            "_size": len(raw),
+            "_preview": raw[:LOG_BODY_MAX_BYTES].decode("utf-8", "replace"),
+        }
+    import json as _json
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        return {"_raw": raw.decode("utf-8", "replace")}
+    return parsed if isinstance(parsed, dict) else {"_value": parsed}
+
+
+def _looks_like_streaming(response, path: str, stream_flag) -> bool:
+    ctype = (response.headers.get("content-type") or "").lower()
+    if "text/event-stream" in ctype or "ndjson" in ctype:
+        return True
+    if (response.headers.get("x-accel-buffering") or "").strip().lower() == "no":
+        return True
+    if stream_flag is True:
+        return True
+    low = path.lower()
+    return any(hint in low for hint in _STREAMING_PATH_HINTS)
+
+
+async def _capture_response_body(response):
+    """读出**非流式**响应体并重建响应，返回 (response, body_dict)。
+
+    只在已判定为非流式时调用。BaseHTTPMiddleware 的 call_next 一律返回带
+    body_iterator 的包装响应（连 JSONResponse 也是），所以必须读迭代器再重建。
+    重建时直接搬 raw_headers，保留重复头（CORS 的 vary 等）与 content-length 原样。
+    """
+    body_iterator = getattr(response, "body_iterator", None)
+    if body_iterator is None:
+        return response, _body_for_log(getattr(response, "body", None))
+    try:
+        content_length = int(response.headers.get("content-length") or 0)
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length > LOG_BODY_CAPTURE_LIMIT:
+        return response, {"_note": "response too large to capture", "_size": content_length}
+
+    chunks = [chunk async for chunk in body_iterator]
+    raw = b"".join(bytes(c) for c in chunks)
+    rebuilt = Response(content=raw, status_code=response.status_code)
+    rebuilt.raw_headers = list(response.raw_headers)
+    rebuilt.background = response.background
+    return rebuilt, _body_for_log(raw)
+
+
 @app.middleware("http")
 async def log_capture_middleware(request: Request, call_next):
     path = request.url.path
@@ -263,6 +335,20 @@ async def log_capture_middleware(request: Request, call_next):
     if status >= 400:
         error_msg = f"HTTP {status}"
 
+    # 完整 body 记录（默认关；关闭时下面两个变量恒为 None，记录与开关引入前完全一致）
+    request_body = None
+    response_body = None
+    if settings.log_bodies_enabled and is_api:
+        try:
+            request_body = _body_for_log(getattr(request.state, "_body_cache", None))
+            if _looks_like_streaming(response, path, stream):
+                response_body = dict(_STREAMING_NOT_CAPTURED)
+            else:
+                response, response_body = await _capture_response_body(response)
+        except Exception as e:
+            # body 记录是排障辅助功能，任何异常都不得影响这次请求本身
+            logger.warning(f"[log_bodies] 记录请求/响应体失败，已跳过: {e}")
+
     log_store = request.app.state.log_store
     record = create_log_record(
         method=method,
@@ -273,6 +359,8 @@ async def log_capture_middleware(request: Request, call_next):
         latency_ms=latency_ms,
         stream=stream,
         error=error_msg,
+        request_body=request_body,
+        response_body=response_body,
     )
     log_store.add(record)
 

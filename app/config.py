@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     # 该时长内新请求优先跳过它，到期自动恢复参与。设 0 关闭冷却（每次都从第一家重试）。
     # 该特性默认生效、无单独开关：仅当某 model 配置了同名多家时才有可见行为变化，单家零回归。
     thirdparty_failover_cooldown: float = 180.0
+    # 完整请求/响应体记录（面板日志详情视图）。**默认关**：请求体含用户完整提示词，
+    # 属隐私 + 体积敏感，只有运维明确需要排障时才开。开启后也只记 body、绝不记任何
+    # 请求头（Authorization 等凭据不进日志），且流式响应只记一个标记、绝不缓冲整个流。
+    log_bodies_enabled: bool = False
 
     @field_validator("gemini_psid")
     @classmethod
