@@ -1,12 +1,13 @@
 import logging
 import math
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
+from app.core import settings_overrides
 from app.core.account_pool import account_pool, RotationStrategy
 from app.core.settings_overrides import (
     EDITABLE_FIELDS,
@@ -92,9 +93,14 @@ def _get_grouped_settings() -> Dict[str, Dict[str, Any]]:
     }
 
 
+# .env 的位置。刻意保持相对路径（在使用时才由 OS 相对 CWD 解析），只是把字面量收成
+# 一处，好让写入与"写入前快照"用的一定是同一个文件。
+ENV_PATH = Path(".env")
+
+
 def _update_env_file(updates: Dict[str, Any]) -> None:
     """Update .env file with new values"""
-    env_path = Path(".env")
+    env_path = ENV_PATH
 
     if not env_path.exists():
         lines = []
@@ -244,6 +250,70 @@ def _coerce_payload(updates: Dict[str, Any]) -> Dict[str, Any]:
     return coerced
 
 
+def _read_file_snapshot(path: Path) -> Optional[bytes]:
+    """快照文件的原始字节。文件不存在返回 ``None``。
+
+    "不存在"本身也是一种必须能还原的状态：覆盖文件是第一次写时若后续步骤失败，
+    回滚必须把它删掉，否则会留下一份没人知道的半成品 —— 而它的优先级高于环境变量，
+    下次重启就会静默生效。
+    """
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_file_snapshot(path: Path, snapshot: Optional[bytes]) -> None:
+    """把文件还原成 ``_read_file_snapshot`` 拍下的状态（含"原本不存在"→删除）。
+
+    已经与快照一致时直接返回：写盘在 open 阶段就失败（只读文件/只读目录）时文件根本
+    没被动过，这时再去写一遍只会在同一个地方再抛一次 PermissionError。
+    """
+    if _read_file_snapshot(path) == snapshot:
+        return
+    if snapshot is None:
+        path.unlink(missing_ok=True)
+        return
+    path.write_bytes(snapshot)
+
+
+def _rollback_memory(snapshot: Dict[str, Any]) -> None:
+    """把内存（以及 account_pool 里的活配置）还原到本次请求之前。
+
+    还原本身也可能抛（例如 account_pool 状态异常）；那只记日志，绝不能盖掉调用方
+    正在往上抛的原始异常。
+    """
+    for key, old in snapshot.items():
+        object.__setattr__(settings, key, old)
+    try:
+        if "rotation_strategy" in snapshot:
+            account_pool.set_strategy(snapshot["rotation_strategy"])
+        if "max_concurrent_per_account" in snapshot:
+            account_pool.set_max_concurrent(snapshot["max_concurrent_per_account"])
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"Failed to roll back account pool configuration after a settings error: {e}; "
+            "the running rotation config may disagree with the in-memory settings"
+        )
+
+
+def _rollback_persisted_files(layers: Iterable[Tuple[Path, Optional[bytes]]]) -> None:
+    """按传入顺序（调用方给的是写入的逆序）还原已落盘的层。
+
+    磁盘满 / 目录已被改成只读等情况会让还原自身失败。那种情况必须留下明确的日志说明
+    配置处于不一致状态，但同样不能让还原的异常掩盖原始异常。
+    """
+    for path, snapshot in layers:
+        try:
+            _restore_file_snapshot(path, snapshot)
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                f"Failed to roll back {path} after a settings write error: {e}; "
+                "this file is now out of sync with the running configuration and "
+                "will be replayed on the next restart"
+            )
+
+
 @router.post("", response_model=SettingsResponse)
 async def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
     """Update application settings. Updates the persisted overrides, .env and memory."""
@@ -260,8 +330,7 @@ async def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
             _update_in_memory_settings(updates)
         except Exception:
             # 回滚已改动的内存值，避免半更新状态
-            for key, old in snapshot.items():
-                object.__setattr__(settings, key, old)
+            _rollback_memory(snapshot)
             raise
 
         # 3) 内存更新成功，持久化。data/settings-overrides.json 才是真正跨重启生效的
@@ -269,20 +338,30 @@ async def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
         #    注入真实环境变量，压过容器内 .env，且宿主机 .env 根本没挂进容器）。
         #    .env 仍然照写，保持裸机/源码部署的配置文件可读可改。
         #
-        #    写盘同样要回滚内存：只读的 data/ 或 .env（自定 compose `user:`、rootless
-        #    podman uid 映射、只读卷）会让这里抛异常。若不回滚，管理员看到的是"保存失败"，
-        #    而值其实已经在内存里生效了 —— 对 log_bodies_enabled 这种隐私开关，
-        #    "以为没关掉、其实关了"和"以为关掉了、其实还在记录"都不可接受。
+        #    这一步必须是**全有或全无**：内存 / 覆盖文件 / .env 三层里任何一层失败，
+        #    三层都要回到请求前的状态。只回滚内存是不够的 —— 覆盖文件先写、.env 后写，
+        #    只读的 .env（0400、只读卷、rootless podman uid 映射）会让第二步抛异常，
+        #    而第一步已经把值写进了优先级最高的覆盖文件。那样管理员看到的是"保存失败"、
+        #    内存也被改回去了，但容器下次重启覆盖文件就会生效 —— 对 log_bodies_enabled
+        #    这种隐私开关，等于在管理员以为什么都没发生的情况下静默打开了完整提示词日志。
+        overrides_path = settings_overrides.OVERRIDES_PATH
+        try:
+            overrides_before = _read_file_snapshot(overrides_path)
+            env_before = _read_file_snapshot(ENV_PATH)
+        except Exception:
+            # 连快照都拍不下来就别动盘：没有快照就没法保证能回滚。
+            _rollback_memory(snapshot)
+            raise
+
         try:
             save_overrides(updates)
             _update_env_file(updates)
         except Exception:
-            for key, old in snapshot.items():
-                object.__setattr__(settings, key, old)
-            if "rotation_strategy" in snapshot:
-                account_pool.set_strategy(snapshot["rotation_strategy"])
-            if "max_concurrent_per_account" in snapshot:
-                account_pool.set_max_concurrent(snapshot["max_concurrent_per_account"])
+            # 逆序还原：.env 是最后写的，先还原它，再还原覆盖文件，最后还原内存。
+            _rollback_persisted_files(
+                ((ENV_PATH, env_before), (overrides_path, overrides_before))
+            )
+            _rollback_memory(snapshot)
             raise
 
         # Return updated settings

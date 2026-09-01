@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -391,3 +392,128 @@ def test_failure_detail_does_not_leak_filesystem_paths(client, overrides_path, m
     assert resp.status_code == 500
     assert secret_path not in resp.text
     assert ".tmp" not in resp.text
+
+
+# --------------------------------------------------------------------------
+# 三层存储必须全有或全无
+#
+# 缺陷：写盘顺序是「覆盖文件 → .env」，但失败时只回滚内存。.env 只读（0400、只读卷、
+# rootless podman uid 映射）时，save_overrides 已经把值写进了**优先级最高**的
+# data/settings-overrides.json，随后 _update_env_file 抛异常 → 500 → 内存被回滚。
+# 管理员看到"保存失败"，以为什么都没发生；容器下次重启时覆盖文件生效，
+# log_bodies_enabled 被静默打开，用户的完整提示词从此进日志 —— 恰好把这次要提供的
+# 隐私保证反了过来。
+#
+# 下面用真实文件权限复现，不打桩：打桩测不出"写盘顺序"这个根因。
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def disk_layers(tmp_path, monkeypatch):
+    """把两层落盘目标都指到 tmp_path，用真实文件 + 真实权限位驱动。
+
+    ``.env`` 由 ``app.routers.settings.ENV_PATH``（相对路径）在打开时相对 CWD 解析，
+    所以直接 chdir 过去；覆盖文件走 ``so.OVERRIDES_PATH``。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    overrides = data_dir / "settings-overrides.json"
+    monkeypatch.setattr(so, "OVERRIDES_PATH", overrides)
+    monkeypatch.chdir(tmp_path)
+    layers = SimpleNamespace(env=tmp_path / ".env", overrides=overrides, data_dir=data_dir)
+    try:
+        yield layers
+    finally:
+        # 只读目录/文件会让 tmp_path 的清理失败，收尾一律恢复可写。
+        for p in (data_dir, layers.env):
+            if p.exists():
+                p.chmod(0o700 if p.is_dir() else 0o600)
+
+
+def test_readonly_env_leaves_the_overrides_file_byte_identical(client, disk_layers):
+    """.env 不可写 → 500，且优先级最高的覆盖文件必须逐字节没变。
+
+    这是隐私反转的正面复现：不回滚覆盖文件的话，这里断言的字节会变成 true。
+    """
+    object.__setattr__(settings, "log_bodies_enabled", False)
+    disk_layers.overrides.write_text('{\n  "log_bodies_enabled": false\n}', encoding="utf-8")
+    overrides_before = disk_layers.overrides.read_bytes()
+    disk_layers.env.write_text("LOG_BODIES_ENABLED=false\n", encoding="utf-8")
+    env_before = disk_layers.env.read_bytes()
+    disk_layers.env.chmod(0o400)
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"log_bodies_enabled": True}},
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 500, resp.text
+    assert disk_layers.overrides.read_bytes() == overrides_before, (
+        "返回了 500，覆盖文件却已经写进了新值：它优先级高于环境变量，"
+        "下次重启会静默打开完整提示词日志，而管理员以为什么都没发生"
+    )
+    assert disk_layers.env.read_bytes() == env_before
+    assert settings.log_bodies_enabled is False
+    assert so.load_overrides(disk_layers.overrides)["log_bodies_enabled"] is False, (
+        "重启回放拿到的仍必须是请求前的值"
+    )
+
+
+def test_rollback_deletes_an_overrides_file_that_did_not_exist_before(client, disk_layers):
+    """覆盖文件原本不存在 + 后续写盘失败 → 回滚后它必须仍然不存在。
+
+    留下半成品文件同样是隐私反转：全新部署第一次改设置就撞上只读 .env 时，
+    磁盘上会凭空多出一份没人知道、却压过环境变量的配置。
+    """
+    object.__setattr__(settings, "log_bodies_enabled", False)
+    assert not disk_layers.overrides.exists(), "前提变了：覆盖文件本应不存在"
+    disk_layers.env.write_text("LOG_BODIES_ENABLED=false\n", encoding="utf-8")
+    disk_layers.env.chmod(0o400)
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"log_bodies_enabled": True}},
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 500, resp.text
+    assert not disk_layers.overrides.exists(), (
+        "回滚后留下了半成品覆盖文件，重启时会生效"
+    )
+    assert settings.log_bodies_enabled is False
+
+
+def test_readonly_data_dir_leaves_env_and_memory_untouched(client, disk_layers):
+    """data/ 不可写 → 500，.env 与内存都回到请求前。"""
+    object.__setattr__(settings, "max_retries", 3)
+    disk_layers.env.write_text("MAX_RETRIES=3\n", encoding="utf-8")
+    env_before = disk_layers.env.read_bytes()
+    disk_layers.data_dir.chmod(0o500)
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"max_retries": 9}},
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 500, resp.text
+    assert disk_layers.env.read_bytes() == env_before
+    assert settings.max_retries == 3
+    assert not disk_layers.overrides.exists()
+
+
+def test_happy_path_still_writes_all_three_layers(client, disk_layers):
+    """三层都可写时行为不变：内存 / 覆盖文件 / .env 全部落到新值。"""
+    object.__setattr__(settings, "log_bodies_enabled", False)
+    disk_layers.env.write_text("LOG_BODIES_ENABLED=false\n", encoding="utf-8")
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"log_bodies_enabled": True}},
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert settings.log_bodies_enabled is True
+    assert json.loads(disk_layers.overrides.read_text(encoding="utf-8"))["log_bodies_enabled"] is True
+    assert "LOG_BODIES_ENABLED=True" in disk_layers.env.read_text(encoding="utf-8")
