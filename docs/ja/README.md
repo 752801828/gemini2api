@@ -423,7 +423,7 @@ response = client.chat.completions.create(
 | GET | `/usage-stats/summary` | 使用統計の概要 |
 | GET | `/usage-stats/history` | 履歴トレンドデータ |
 | GET | `/settings` | 編集可能な現在の設定を取得（グループ別） |
-| POST | `/settings` | 設定を一括更新（.env 書き込み + メモリのホットアップデート） |
+| POST | `/settings` | 設定を一括更新（メモリのホットアップデート + `data/settings-overrides.json` へ書き込み、`.env` にも書き込み） |
 | GET | `/api-keys` | API Key 一覧（キーはマスク表示） |
 | GET | `/api-keys/catalog` | Provider カタログ（内蔵モデル一覧） |
 | POST | `/api-keys` | API Key を追加 |
@@ -452,6 +452,19 @@ response = client.chat.completions.create(
 ---
 
 ## ⚙ 設定
+
+> [!IMPORTANT]
+> **パネルで変更した設定項目は環境変数より優先されます。** Web パネルの「設定」
+> ページで保存した項目は `data/settings-overrides.json`（`data/` は docker-compose の
+> 永続 bind mount）に書き込まれ、起動のたびに再適用されて下表の環境変数を**上書き**
+> します。これは意図的な挙動です。パネルで `LOG_BODIES_ENABLED` をオフにしたあと、
+> `docker compose restart` でオンに戻ってはいけないからです。
+>
+> つまり **`.env` を編集して再起動しても反映されない** 場合、その項目はパネルの設定に
+> 上書きされている可能性が高いです。起動ログに
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...`
+> という行が出て対象項目を示します。`data/settings-overrides.json` を削除すれば
+> 環境変数に制御が戻ります。
 
 | 変数 | 必須 | デフォルト | 説明 |
 |------|------|----------|------|

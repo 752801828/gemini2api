@@ -502,7 +502,7 @@ curl -X POST http://localhost:5918/v1/images/generations \
 | GET | `/usage-stats/summary` | 用量统计概览（累计请求数、错误率、延迟、轮换成功率） |
 | GET | `/usage-stats/history` | 历史趋势数据（支持 granularity 和 hours 参数） |
 | GET | `/settings` | 获取当前可编辑配置（分组返回） |
-| POST | `/settings` | 批量更新配置（写入 .env + 热更新内存） |
+| POST | `/settings` | 批量更新配置（热更新内存 + 写入 `data/settings-overrides.json`，同时照写 `.env`） |
 | GET | `/api-keys` | API Key 列表（密钥脱敏） |
 | GET | `/api-keys/catalog` | Provider 目录（内置模型列表） |
 | POST | `/api-keys` | 添加 API Key |
@@ -571,6 +571,17 @@ curl -X POST http://localhost:5918/admin/reload-cookies \
 ---
 
 ## ⚙ 配置说明
+
+> [!IMPORTANT]
+> **面板改过的设置项优先级高于环境变量。** 在 Web 面板「设置」页保存过的项会写进
+> `data/settings-overrides.json`（`data/` 是 docker-compose 的持久化 bind mount），
+> 并在每次启动时回放、**覆盖**下表中对应的环境变量。
+> 这是刻意的：面板上关掉 `LOG_BODIES_ENABLED` 之后，`docker compose restart` 不能把它
+> 重新打开。
+>
+> 所以：**改了 `.env` 重启却不生效**，多半就是该字段被面板覆盖了。启动日志里有一行
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...` 会点名
+> 具体字段；删掉 `data/settings-overrides.json` 即可把控制权交回环境变量。
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|

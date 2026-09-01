@@ -334,6 +334,19 @@ print(msg.content[0].text)
 
 ## ⚙ 설정
 
+> [!IMPORTANT]
+> **패널에서 변경한 설정 항목은 환경 변수보다 우선합니다.** 웹 패널의 "설정"
+> 페이지에서 저장한 항목은 `data/settings-overrides.json`(`data/`는 docker-compose의
+> 영속 bind mount)에 기록되고, 시작할 때마다 다시 적용되어 아래 표의 해당 환경 변수를
+> **덮어씁니다**. 이는 의도된 동작입니다. 패널에서 `LOG_BODIES_ENABLED`를 끈 뒤
+> `docker compose restart`로 다시 켜져서는 안 되기 때문입니다.
+>
+> 따라서 **`.env`를 수정하고 재시작했는데 반영되지 않는다면** 해당 항목이 패널 설정에
+> 덮어써졌을 가능성이 큽니다. 시작 로그의
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...`
+> 줄이 해당 항목을 알려줍니다. `data/settings-overrides.json`을 삭제하면 환경 변수가
+> 다시 제어권을 가집니다.
+
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `GEMINI_PSID` | ✅ | — | 브라우저 `__Secure-1PSID` |

@@ -354,6 +354,24 @@ curl -X POST http://localhost:5918/openai/v1/chat/completions \
 
 ## 常见问题
 
+### 改了 .env 重启却不生效
+
+**症状**：修改 `.env` 里的某个设置项并 `docker compose restart`，值没有变化。
+
+**原因**：在 Web 面板「设置」页保存过的项会写进 `data/settings-overrides.json`，
+它在每次启动时回放，**优先级高于环境变量**。这是刻意的 —— 面板上关掉
+`LOG_BODIES_ENABLED` 之后，重启不能把它重新打开。
+
+**排查**：启动日志里搜这一行，它会点名被覆盖的字段：
+
+```bash
+docker compose logs | grep "panel setting override"
+# [INFO] app.main: Applied 2 panel setting override(s) from data/settings-overrides.json: log_bodies_enabled=False, max_retries=7
+```
+
+**解决**：要么在面板里改（推荐），要么删掉 `data/settings-overrides.json`
+把控制权交回 `.env` / 环境变量，然后重启。
+
 ### Cookie 过期
 
 **症状**：服务返回 `SNlM0e not found` 错误

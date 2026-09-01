@@ -226,6 +226,27 @@ You should receive an AI response. If you get a 401 error, verify your API Key i
 
 ## Troubleshooting
 
+### Editing .env and Restarting Has No Effect
+
+**Symptom:** You change a setting in `.env`, run `docker compose restart`, and the
+value does not change.
+
+**Cause:** Anything saved on the web panel's Settings page is written to
+`data/settings-overrides.json`, which is replayed on every startup and **takes
+precedence over environment variables**. This is deliberate: once you turn
+`LOG_BODIES_ENABLED` off in the panel, a restart must not turn it back on.
+
+**Diagnose:** Look for this line in the startup log — it names the overridden fields:
+
+```bash
+docker compose logs | grep "panel setting override"
+# [INFO] app.main: Applied 2 panel setting override(s) from data/settings-overrides.json: log_bodies_enabled=False, max_retries=7
+```
+
+**Fix:** Either change the value in the panel (recommended), or delete
+`data/settings-overrides.json` to hand control back to `.env` / environment
+variables, then restart.
+
 ### Cookie Expires Quickly
 
 **Symptom:** Service works for 1-2 hours then fails with "SNlM0e not found"

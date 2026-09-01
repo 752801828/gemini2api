@@ -424,7 +424,7 @@ response = client.chat.completions.create(
 | GET | `/usage-stats/summary` | 用量統計概覽 |
 | GET | `/usage-stats/history` | 歷史趨勢數據 |
 | GET | `/settings` | 取得當前可編輯配置（分組回傳） |
-| POST | `/settings` | 批量更新配置（寫入 .env + 熱更新記憶體） |
+| POST | `/settings` | 批量更新配置（熱更新記憶體 + 寫入 `data/settings-overrides.json`，同時照寫 `.env`） |
 | GET | `/api-keys` | API Key 列表（密鑰脫敏） |
 | GET | `/api-keys/catalog` | Provider 目錄（內建模型列表） |
 | POST | `/api-keys` | 新增 API Key |
@@ -453,6 +453,17 @@ response = client.chat.completions.create(
 ---
 
 ## ⚙ 設定說明
+
+> [!IMPORTANT]
+> **面板改過的設定項優先級高於環境變數。** 在 Web 面板「設定」頁儲存過的項目會寫進
+> `data/settings-overrides.json`（`data/` 是 docker-compose 的持久化 bind mount），
+> 並在每次啟動時回放、**覆蓋**下表中對應的環境變數。
+> 這是刻意的：面板上關掉 `LOG_BODIES_ENABLED` 之後，`docker compose restart` 不能把它
+> 重新打開。
+>
+> 所以：**改了 `.env` 重啟卻不生效**，多半就是該欄位被面板覆蓋了。啟動日誌裡有一行
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...` 會點名
+> 具體欄位；刪掉 `data/settings-overrides.json` 即可把控制權交回環境變數。
 
 | 變數 | 必填 | 預設值 | 說明 |
 |------|------|--------|------|

@@ -423,7 +423,7 @@ response = client.chat.completions.create(
 | GET | `/usage-stats/summary` | Usage statistics summary |
 | GET | `/usage-stats/history` | Historical trend data |
 | GET | `/settings` | Get current editable config (grouped) |
-| POST | `/settings` | Batch-update config (writes .env + hot-reloads memory) |
+| POST | `/settings` | Batch-update config (hot-reloads memory + writes `data/settings-overrides.json`; also writes `.env`) |
 | GET | `/api-keys` | API Key list (keys masked) |
 | GET | `/api-keys/catalog` | Provider catalog (built-in model lists) |
 | POST | `/api-keys` | Add API Key |
@@ -452,6 +452,20 @@ response = client.chat.completions.create(
 ---
 
 ## ⚙ Configuration
+
+> [!IMPORTANT]
+> **Settings changed in the panel take precedence over environment variables.**
+> Anything you save on the web panel's Settings page is written to
+> `data/settings-overrides.json` (`data/` is the persistent bind mount used by
+> docker-compose) and replayed on every startup, **overriding** the corresponding
+> environment variable in the table below. This is deliberate: once you turn
+> `LOG_BODIES_ENABLED` off in the panel, `docker compose restart` must not turn it
+> back on.
+>
+> So if you **edited `.env`, restarted, and nothing changed**, that field is most
+> likely overridden by the panel. The startup log names the affected fields:
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...`.
+> Delete `data/settings-overrides.json` to hand control back to the environment.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
