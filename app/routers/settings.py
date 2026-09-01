@@ -1,4 +1,5 @@
 import logging
+import math
 from pathlib import Path
 from typing import Dict, Any
 
@@ -194,6 +195,15 @@ def _validate_settings_domain(updates: Dict[str, Any]) -> None:
                 detail=f"Setting '{key}' must be of type {expected_type.__name__}, got {type(value).__name__}",
             )
 
+        # NaN / ±Infinity 是合法 float 且 `nan < 0` / `inf < 0` 均为 False，会绕过
+        # 下面所有比较，被原样持久化并在每次启动回放（chat_cleanup_interval_hours=inf
+        # 会让清理循环 asyncio.sleep(inf) 永不唤醒）。必须在这里挡掉。
+        if isinstance(value, float) and not math.isfinite(value):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Setting '{key}' must be a finite number",
+            )
+
         # 取值域：计数/间隔不允许负数，并发上限至少为 1
         if key in _NON_NEGATIVE_FIELDS and value < 0:
             raise HTTPException(
@@ -258,8 +268,22 @@ async def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
         #    那份（详见 app/core/settings_overrides 模块注释：docker-compose 用 env_file
         #    注入真实环境变量，压过容器内 .env，且宿主机 .env 根本没挂进容器）。
         #    .env 仍然照写，保持裸机/源码部署的配置文件可读可改。
-        save_overrides(updates)
-        _update_env_file(updates)
+        #
+        #    写盘同样要回滚内存：只读的 data/ 或 .env（自定 compose `user:`、rootless
+        #    podman uid 映射、只读卷）会让这里抛异常。若不回滚，管理员看到的是"保存失败"，
+        #    而值其实已经在内存里生效了 —— 对 log_bodies_enabled 这种隐私开关，
+        #    "以为没关掉、其实关了"和"以为关掉了、其实还在记录"都不可接受。
+        try:
+            save_overrides(updates)
+            _update_env_file(updates)
+        except Exception:
+            for key, old in snapshot.items():
+                object.__setattr__(settings, key, old)
+            if "rotation_strategy" in snapshot:
+                account_pool.set_strategy(snapshot["rotation_strategy"])
+            if "max_concurrent_per_account" in snapshot:
+                account_pool.set_max_concurrent(snapshot["max_concurrent_per_account"])
+            raise
 
         # Return updated settings
         grouped = _get_grouped_settings()
@@ -270,5 +294,10 @@ async def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # 细节只进日志：原始异常里带着容器内绝对路径和原子写的临时文件名，
+        # 没必要回给浏览器。
         logger.error(f"Failed to update settings: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update settings; see server logs for details",
+        )

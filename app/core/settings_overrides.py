@@ -20,6 +20,7 @@ bind-mount 的持久目录（``data/api-keys.json`` / ``data/logs.json`` /
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -132,6 +133,13 @@ def check_domain(key: str, value: Any) -> Optional[str]:
     负数间隔）会被持久化，并在下次启动时让 ``RotationStrategy(...)`` / ``Settings()``
     构造抛异常，永久 brick 启动。
     """
+    # NaN / ±Infinity 都是合法的 Python float，且 `nan < 0` / `inf < 0` 都是 False，
+    # 会一路通过下面的比较。json 模块两端都认这些非 RFC-8259 字面量，于是它们能
+    # 原样写进 settings-overrides.json 并在每次启动被回放（还压过环境变量）：
+    # chat_cleanup_interval_hours=inf 会让 asyncio.sleep(inf) 永不唤醒，清理循环
+    # 从此静默停摆，而且改环境变量也救不回来。
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"Setting '{key}' must be a finite number"
     if key in NON_NEGATIVE_FIELDS and value < 0:
         return f"Setting '{key}' must be >= 0"
     if key in POSITIVE_FIELDS and value < 1:

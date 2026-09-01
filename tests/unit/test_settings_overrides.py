@@ -281,3 +281,113 @@ def test_does_not_touch_process_environment(overrides_path):
     so.save_overrides({"log_bodies_enabled": True}, overrides_path)
     so.apply_overrides(Settings(), overrides_path)
     assert dict(os.environ) == before
+
+
+# --------------------------------------------------------------------------
+# 非有限浮点：NaN / ±Infinity 必须挡在持久化之外
+#
+# 缺陷：NaN/inf 都是合法 Python float，而 `nan < 0` / `inf < 0` 都是 False，会绕过
+# 全部取值域比较；json 模块两端都认这些非 RFC-8259 字面量，于是它们能原样写进
+# settings-overrides.json 并在每次启动被回放（还压过环境变量）。
+# chat_cleanup_interval_hours=inf → main.py 的 asyncio.sleep(max(1, inf)*3600)
+# 永不唤醒，Gemini 会话清理循环从此静默停摆，且改环境变量也救不回来。
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_check_domain_rejects_non_finite_floats(bad):
+    reason = so.check_domain("chat_cleanup_interval_hours", bad)
+    assert reason is not None, f"{bad!r} 被判为合法取值，会被持久化并每次启动回放"
+    assert "finite" in reason
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_apply_overrides_ignores_non_finite_values_in_a_hand_edited_file(
+    overrides_path, literal
+):
+    """手改坏的文件必须被逐条忽略，而不是把 inf 灌进运行时。"""
+    overrides_path.write_text(
+        '{"chat_cleanup_interval_hours": %s}' % literal, encoding="utf-8"
+    )
+    fresh = Settings()
+    baseline = fresh.chat_cleanup_interval_hours
+
+    applied = so.apply_overrides(fresh, overrides_path)
+
+    assert applied == {}
+    assert fresh.chat_cleanup_interval_hours == baseline
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity"])
+def test_post_rejects_non_finite_floats_and_persists_nothing(
+    client, overrides_path, _no_env_write, literal
+):
+    resp = client.post(
+        "/admin/settings",
+        content=('{"settings": {"chat_cleanup_keep_hours": %s}}' % literal).encode(),
+        headers={**_AUTH, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert not overrides_path.exists()
+
+
+# --------------------------------------------------------------------------
+# 写盘失败必须回滚内存
+#
+# 缺陷：save_overrides / _update_env_file 抛异常时返回 500，但内存里的值已经改了。
+# 管理员看到"保存失败"，实际 log_bodies_enabled 已经生效，重启后又悄悄弹回去 ——
+# 对隐私开关来说，"以为关掉了、其实还在记录"和反过来都不可接受。
+# 触发条件：自定 compose `user:`、rootless podman uid 映射、只读卷等 data/ 不可写的部署。
+# --------------------------------------------------------------------------
+
+def test_memory_is_rolled_back_when_persistence_fails(client, overrides_path, monkeypatch):
+    object.__setattr__(settings, "log_bodies_enabled", True)
+
+    def _boom(_updates, _path=None):
+        raise PermissionError(13, "Permission denied", str(overrides_path))
+
+    monkeypatch.setattr(sr, "save_overrides", _boom)
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"log_bodies_enabled": False}},
+        headers=_AUTH,
+    )
+    assert resp.status_code == 500
+    assert settings.log_bodies_enabled is True, (
+        "返回了 500 却把内存改掉了：面板说保存失败，隐私开关其实已经生效"
+    )
+    assert not overrides_path.exists()
+
+
+def test_memory_is_rolled_back_when_env_write_fails(client, overrides_path, monkeypatch):
+    object.__setattr__(settings, "max_retries", 3)
+    monkeypatch.setattr(
+        sr, "_update_env_file", lambda updates: (_ for _ in ()).throw(PermissionError(".env"))
+    )
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"max_retries": 9}},
+        headers=_AUTH,
+    )
+    assert resp.status_code == 500
+    assert settings.max_retries == 3
+
+
+def test_failure_detail_does_not_leak_filesystem_paths(client, overrides_path, monkeypatch):
+    """500 的 detail 不该把容器内绝对路径 / 原子写临时文件名回给浏览器。"""
+    secret_path = "/app/data/settings-overrides.json.abc123.tmp"
+
+    def _boom(_updates, _path=None):
+        raise PermissionError(13, "Permission denied", secret_path)
+
+    monkeypatch.setattr(sr, "save_overrides", _boom)
+
+    resp = client.post(
+        "/admin/settings",
+        json={"settings": {"log_bodies_enabled": False}},
+        headers=_AUTH,
+    )
+    assert resp.status_code == 500
+    assert secret_path not in resp.text
+    assert ".tmp" not in resp.text
