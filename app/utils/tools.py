@@ -4,6 +4,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 畸形工具调用 JSON 的降级提示。既是发给客户端的文案，也是 is_malformed_tool_result
+# 的判定依据——两者共用同一个常量，避免改文案时判定悄悄失效。
+MALFORMED_TOOL_NOTICE = "（模型返回的工具调用格式有误，已忽略。请重试或换用 gemini-flash。）"
+
 
 # 明确的图像生成意图关键词。收窄到「确实在要图」的表达，避免误判
 # （如"生成一份报告""create a plan"不该触发生图）。
@@ -307,11 +311,52 @@ def parse_tool_response(text: str) -> dict:
                        or ('"name"' in text and '"arguments"' in text))
     if looks_like_tool:
         logger.warning(f"工具调用 JSON 解析失败，畸形片段不透传: {text[:120]!r}")
-        return {"type": "text",
-                "content": "（模型返回的工具调用格式有误，已忽略。请重试或换用 gemini-flash。）"}
+        return {"type": "text", "content": MALFORMED_TOOL_NOTICE}
 
     # 普通文本（非工具意图）原样返回
     return {"type": "text", "content": text}
+
+
+def is_malformed_tool_result(parsed) -> bool:
+    """判断 parse_tool_response 的结果是不是「畸形工具 JSON」的降级提示。"""
+    return (
+        isinstance(parsed, dict)
+        and parsed.get("type") == "text"
+        and parsed.get("content") == MALFORMED_TOOL_NOTICE
+    )
+
+
+async def parse_tool_response_with_retry(text: str, regenerate) -> dict:
+    """解析工具调用文本；判定为畸形时用 ``regenerate()`` 重新取一次文本，再解析一次。
+
+    **明确不做「截断 JSON 自动修补」**：补全一个被截断的工具调用，等于拿猜出来的参数
+    去执行工具（issue #10 里那条被截断的片段就是个超长 alpha 表达式），风险远大于收益。
+    宁可这一轮失败让客户端重试，也绝不猜。
+
+    约束：
+    - **最多重试一次**，不递归；首次即合法时一次都不重试（不平白加倍延迟）。
+    - ``regenerate()`` 抛异常 / 返回空 / 二次仍畸形 → 一律返回**首次**结果。
+      重试绝不能把一次"降级成功"变成 500。
+    """
+    parsed = parse_tool_response(text)
+    if regenerate is None or not is_malformed_tool_result(parsed):
+        return parsed
+
+    logger.warning("工具调用 JSON 畸形，重新生成一次（仅一次，不修补截断 JSON）")
+    try:
+        retry_text = await regenerate()
+    except Exception as e:
+        logger.warning(f"工具调用重试失败，沿用首次降级结果: {e}")
+        return parsed
+
+    if not isinstance(retry_text, str) or not retry_text.strip():
+        return parsed
+
+    retried = parse_tool_response(retry_text)
+    if is_malformed_tool_result(retried):
+        logger.warning("工具调用重试后仍畸形，不再重试")
+        return parsed
+    return retried
 
 
 def estimate_tokens(text: str) -> int:

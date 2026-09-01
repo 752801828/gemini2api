@@ -20,7 +20,7 @@ from app.models.gemini import (
     GeminiModelInfo,
     GeminiModelList,
 )
-from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent
+from app.utils.tools import build_tool_prompt, parse_tool_response_with_retry, estimate_tokens, is_image_generation_intent
 from app.utils.prompt import build_prompt_from_messages
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
@@ -235,7 +235,12 @@ async def generate_content(model: str, req: GeminiRequest, request: Request):
     # 工具调用：解析成 Gemini 原生 functionCall part（而非把工具 JSON 当文本塞回去）
     tool_parts = []
     if has_tools:
-        parsed = parse_tool_response(response_text)
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, model, "", attachments,
+                                             gem_id=gem_id, account_id=gem_account_id)
+            return r.get("text", "")
+
+        parsed = await parse_tool_response_with_retry(response_text, _regenerate_for_tools)
         if isinstance(parsed, dict):
             if parsed.get("type") == "tool_calls":
                 for tc in parsed["tool_calls"]:
@@ -354,9 +359,21 @@ async def stream_generate_content(model: str, req: GeminiRequest, request: Reque
                 return
             response_text = result.get("text", "")
             if has_tools:
-                parsed = parse_tool_response(response_text)
+                # NDJSON 流此前只发过空行保活，还没发任何 candidates 块，重试是安全的。
+                # 这条路径不发 functionCall（历史行为：原样把文本流回去），所以重试成功时
+                # 必须改用**重试的那段文本**——否则会把首次那段畸形 JSON 原样流给客户端，
+                # 比修复前（只发降级提示）更糟。未发生重试时 _retried 为空，行为逐字节不变。
+                _retried = {}
+
+                async def _regenerate_for_tools() -> str:
+                    r = await gemini_client.generate(prompt, model, "", attachments,
+                                                     gem_id=gem_id, account_id=gem_account_id)
+                    _retried["text"] = r.get("text", "")
+                    return _retried["text"]
+
+                parsed = await parse_tool_response_with_retry(response_text, _regenerate_for_tools)
                 if isinstance(parsed, dict):
-                    response_text = parsed.get("content", response_text)
+                    response_text = parsed.get("content", _retried.get("text") or response_text)
             async for chunk in split_into_chunks(response_text):
                 yield _chunk(chunk)
         else:

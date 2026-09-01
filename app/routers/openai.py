@@ -21,7 +21,7 @@ from app.models.openai import (
     ModelList, ModelInfo, UsageInfo,
     ImageGenerationRequest, ImageData, ImageResponse,
 )
-from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent, maybe_image_generation_intent
+from app.utils.tools import build_tool_prompt, parse_tool_response_with_retry, estimate_tokens, is_image_generation_intent, maybe_image_generation_intent
 from app.utils.prompt import build_prompt_from_messages, extract_attachments, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
@@ -408,7 +408,13 @@ async def chat_completions(req: ChatRequest, request: Request):
         await conversation_store.update(conv)
 
     if has_tools:
-        parsed = parse_tool_response(text)
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
+                                             gem_id=gem_id, account_id=gem_account_id,
+                                             extended_thinking=extended_thinking)
+            return r.get("text", "")
+
+        parsed = await parse_tool_response_with_retry(text, _regenerate_for_tools)
         if parsed["type"] == "tool_calls":
             tool_calls = []
             for i, tc in enumerate(parsed["tool_calls"]):
@@ -706,7 +712,13 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
         await conversation_store.update(conv)
 
     if has_tools:
-        parsed = parse_tool_response(text)
+        # 此刻只发过 role 首帧 + keepalive，还没发任何 content 块，重试是安全的。
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, model, gemini_conv_id, attachments,
+                                             gem_id=gem_id, account_id=account_id)
+            return r.get("text", "")
+
+        parsed = await parse_tool_response_with_retry(text, _regenerate_for_tools)
         if parsed["type"] == "tool_calls":
             for tc in parsed["tool_calls"]:
                 call_id = f"call_{uuid.uuid4().hex[:8]}"

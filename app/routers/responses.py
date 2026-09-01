@@ -16,7 +16,7 @@ from app.core.responses_protocol import (
 )
 from app.core.stream import iter_with_keepalive, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.routers.openai import _images_to_markdown
-from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens
+from app.utils.tools import build_tool_prompt, parse_tool_response_with_retry, estimate_tokens
 from app.utils.prompt import build_prompt_from_messages, extract_attachments
 
 logger = logging.getLogger(__name__)
@@ -48,11 +48,15 @@ def _normalize_tool_choice_for_prompt(tool_choice):
     return tool_choice
 
 
-def _build_output_items(text: str, has_tools: bool) -> tuple[list[dict], str]:
-    """把模型原始回复文本组装成 Responses output 数组。返回 (output_items, 剩余文本估算用)。"""
+async def _build_output_items(text: str, has_tools: bool, regenerate=None) -> tuple[list[dict], str]:
+    """把模型原始回复文本组装成 Responses output 数组。返回 (output_items, 剩余文本估算用)。
+
+    ``regenerate`` 为可选的「重新取一次模型文本」闭包：工具调用 JSON 畸形时用它重试
+    一次（仅一次，绝不修补截断的 JSON），见 app/utils/tools.parse_tool_response_with_retry。
+    """
     output = []
     if has_tools:
-        parsed = parse_tool_response(text)
+        parsed = await parse_tool_response_with_retry(text, regenerate)
         if parsed["type"] == "tool_calls":
             for tc in parsed["tool_calls"]:
                 output.append({
@@ -162,7 +166,13 @@ async def create_response(request: Request):
     if gen_images:
         md = _images_to_markdown(gen_images, request)
         text = (md + "\n" + text.strip()) if text.strip() else md
-    output, _ = _build_output_items(text, has_tools)
+    async def _regenerate_for_tools() -> str:
+        r = await gemini_client.generate(prompt, resolved_model, "", attachments,
+                                         gem_id=gem_id, account_id=gem_account_id,
+                                         extended_thinking=extended_thinking)
+        return r.get("text", "")
+
+    output, _ = await _build_output_items(text, has_tools, _regenerate_for_tools)
     thoughts = result.get("thoughts") or ""
     if thoughts:
         output = [{"type": "reasoning", "id": new_response_id().replace("resp_", "rs_"),
@@ -217,7 +227,14 @@ async def _stream_gemini_response(request, prompt, model, has_tools, attachments
         if gen_images:
             md = _images_to_markdown(gen_images, request)
             text = (md + "\n" + text.strip()) if text.strip() else md
-        output, _ = _build_output_items(text, has_tools)
+        # 此处只发过 created/in_progress/keepalive，还没发任何 output 块，重试是安全的。
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, model, "", attachments,
+                                             gem_id=gem_id, account_id=gem_account_id,
+                                             extended_thinking=extended_thinking)
+            return r.get("text", "")
+
+        output, _ = await _build_output_items(text, has_tools, _regenerate_for_tools)
         for idx, item in enumerate(output):
             if item["type"] == "function_call":
                 for frame in enc.function_call(item["id"], idx, item["call_id"],

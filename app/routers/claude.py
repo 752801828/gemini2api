@@ -17,7 +17,7 @@ from app.models.claude import (
     ClaudeModelInfo, ClaudeModelList,
 )
 from app.routers.openai import _images_to_markdown
-from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent
+from app.utils.tools import build_tool_prompt, parse_tool_response_with_retry, estimate_tokens, is_image_generation_intent
 from app.utils.prompt import build_prompt_from_messages, extract_attachments, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
@@ -142,7 +142,12 @@ async def create_message(req: ClaudeRequest, request: Request):
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
 
     if has_tools:
-        parsed = parse_tool_response(text)
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, resolved_model, "", attachments,
+                                             gem_id=gem_id, account_id=gem_account_id)
+            return r.get("text", "")
+
+        parsed = await parse_tool_response_with_retry(text, _regenerate_for_tools)
         if parsed["type"] == "tool_calls":
             blocks = []
             for tc in parsed["tool_calls"]:
@@ -366,7 +371,13 @@ async def _stream_claude_buffered(prompt: str, model: str, has_tools: bool, atta
     })
 
     if has_tools:
-        parsed = parse_tool_response(text)
+        # message_start 已发出，但还没发任何 content 块，此处重试是安全的。
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, model, "", attachments,
+                                             gem_id=gem_id, account_id=account_id)
+            return r.get("text", "")
+
+        parsed = await parse_tool_response_with_retry(text, _regenerate_for_tools)
         if parsed["type"] == "tool_calls":
             for i, tc in enumerate(parsed["tool_calls"]):
                 block_id = f"toolu_{uuid.uuid4().hex[:8]}"
