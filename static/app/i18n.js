@@ -1214,7 +1214,7 @@ const translations = {
         'settings.field.chatCleanupSkipPinned': '保留置頂會話',
         'settings.group.logging': '日誌診斷',
         'settings.field.logBodiesEnabled': '記錄完整請求/回應內容',
-        'settings.hint.logBodies': '僅排障時暫時開啟：記錄完整請求/回應內容（含使用者提示詞，不含請求標頭），只存記憶體不寫入磁碟',
+        'settings.hint.logBodies': '僅疑難排解時暫時開啟：記錄完整請求/回應內容（含使用者提示詞，不含請求標頭），只存記憶體不寫入磁碟',
         'settings.saveMapping': '儲存映射',
         'settings.strategy.roundRobin': '輪詢',
         'settings.strategy.leastUsed': '最少使用',

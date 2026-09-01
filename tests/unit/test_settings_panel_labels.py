@@ -72,6 +72,26 @@ def test_every_editable_field_has_a_label():
     assert not missing, f"这些可编辑字段在 getFieldLabel 里没有标签，面板会显示原始字段名: {sorted(missing)}"
 
 
+def test_every_backend_group_has_a_title():
+    """同一类漂移的上一层：后端加了分组、settings.js 的 getGroupTitle 没加。
+
+    getGroupTitle 的兜底是 `t(map[groupKey] || groupKey)`，而 t() 对未知键直接返回
+    键名本身，于是面板会在所有语言下把 "security" 这种原始分组名当标题显示出来。
+    """
+    from app.routers.settings import _get_grouped_settings
+
+    missing = set(_get_grouped_settings()) - set(_group_title_map())
+    assert not missing, f"这些后端分组在 getGroupTitle 里没有标题，面板会显示原始分组名: {sorted(missing)}"
+
+
+def test_response_model_exposes_every_backend_group():
+    """SettingsResponse 未声明的分组会被 pydantic 静默丢弃，面板根本看不到。"""
+    from app.routers.settings import SettingsResponse, _get_grouped_settings
+
+    dropped = set(_get_grouped_settings()) - set(SettingsResponse.model_fields)
+    assert not dropped, f"这些分组没在 SettingsResponse 上声明，会被响应模型丢掉: {sorted(dropped)}"
+
+
 def test_labels_and_group_titles_are_i18n_keys_not_literals():
     """标签值必须是 i18n 键；写死字面量会让非中文面板显示中文。"""
     offenders = {

@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.config import settings, APP_VERSION, mask_secret
+from app.config import settings, APP_VERSION, mask_secret, APPLIED_OVERRIDES
+from app.core.settings_overrides import OVERRIDES_PATH
 from app.core.account_pool import account_pool
 from app.core.auth import verify_api_key, verify_admin_key
 from app.core.limiter import limiter
@@ -56,6 +57,14 @@ async def _flush_log_store(log_store) -> None:
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     logger.info(f"API Key: {mask_secret(settings.api_key)}")
+    if APPLIED_OVERRIDES:
+        # 面板改过的值优先级高于环境变量，运维改了 .env 却"不生效"时这行是唯一线索。
+        logger.info(
+            "Applied %d panel setting override(s) from %s: %s",
+            len(APPLIED_OVERRIDES),
+            OVERRIDES_PATH,
+            ", ".join(f"{k}={v}" for k, v in sorted(APPLIED_OVERRIDES.items())),
+        )
     await account_pool.initialize()
 
     app.state.log_store = LogStore()
@@ -433,11 +442,16 @@ async def serve_generated_image(image_id: str):
     return FileResponse(path, media_type=image_store.content_type_for(image_id))
 
 
+# 这两个入口 HTML 必须每次回源校验：里面写着 base.css?v= / app.js?v= 这些版本串，
+# 缓存住旧 HTML 就等于把整套前端资源都钉在旧版本上（no-cache 仍走 ETag，命中即 304）。
+_HTML_NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/login.html")
 async def login_page():
     login_file = STATIC_DIR / "login.html"
     if login_file.exists():
-        return FileResponse(login_file, media_type="text/html")
+        return FileResponse(login_file, media_type="text/html", headers=_HTML_NO_CACHE)
     return HTMLResponse("<h1>Login page not found</h1>", status_code=404)
 
 
@@ -445,14 +459,37 @@ async def login_page():
 async def index_page():
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file, media_type="text/html")
+        return FileResponse(index_file, media_type="text/html", headers=_HTML_NO_CACHE)
     return HTMLResponse("<h1>Panel not found</h1>", status_code=404)
 
 
 API_DIR = Path(__file__).parent.parent / "api"
 
+
+class RevalidatingStaticFiles(StaticFiles):
+    """给面板的 JS/CSS/HTML 加 ``Cache-Control: no-cache``。
+
+    StaticFiles 默认不发 Cache-Control，浏览器就按启发式新鲜度自己缓存。index.html 只给
+    base.css/mobile.css/app.js 挂了 ?v= 版本串，而 app.js 里 `import './settings.js'`
+    这类裸模块说明符带不上查询串 —— 升级后管理员可能拿到旧的 settings.js/i18n.js，
+    甚至出现"只更新了一半"（新 settings.js + 旧 i18n.js → 界面直接显示
+    settings.field.logBodiesEnabled 这种原始 i18n 键）。
+
+    no-cache 不是不缓存，是"每次必须回源校验"；StaticFiles 本来就发 ETag/Last-Modified，
+    命中即 304 空响应，代价极小，却根治了升级后取到陈旧模块的问题。
+    """
+
+    _REVALIDATE_SUFFIXES = (".js", ".css", ".html", ".json")
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.endswith(self._REVALIDATE_SUFFIXES):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app.mount("/api-assets", StaticFiles(directory=str(API_DIR)), name="api-assets")
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+app.mount("/", RevalidatingStaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
 if __name__ == "__main__":
