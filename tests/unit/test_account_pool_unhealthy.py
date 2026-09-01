@@ -16,6 +16,13 @@
   F2 → test 3（自愈可达性：reload_cookies 恰好被调用一次且请求随后成功）
   F4 → test 5（刷新失败不得把本来健康的 client 永久拉黑）
   F6 → test 6（客户端断连不得算作账号失败）
+
+以下为对抗式复核（reviewer FIX_FIRST）返工后新增的回归守卫：
+  H1 → 自愈被取消时 healing 标志必须清掉，即使清标志那一刻锁正被别人占着
+  H2 → EXPIRED + ACTIVE-不健康 混合场景不得再对 EXPIRED 账号做持锁 check_account()
+  M1 → acquire() 的总耗时不得被自愈的网络 I/O 顶穿 operator 配置的 acquire_timeout
+  M2 → release_disconnected() 必须与 release(success=True) 语义可区分，且仍会唤醒排队者
+  M3 → 池级自愈必须过 client 自己的 _heal_lock，不能绕开它
 """
 import asyncio
 import time
@@ -36,10 +43,17 @@ class _FakeClient:
         self._reload_succeeds = reload_succeeds
         self.reload_calls = 0
         self.generate_calls = 0
+        self.check_account_calls = 0
         # 每次进入 reload_cookies 时回调（用于探测调用现场，比如池锁是否被持有）
         self.on_reload = None
+        # 每次进入 check_account 时回调，同上用途
+        self.on_check_account = None
         # 模拟 reload_cookies 的网络耗时（真实实现是 60s 级超时的网络 I/O）
         self.reload_delay = 0.0
+        # 池级自愈（M3）现在会过 client 自己的单飞锁，真 GeminiWebClient 上是
+        # asyncio.Lock()，这里的替身也得有，否则 `async with client._heal_lock` 会
+        # AttributeError。
+        self._heal_lock = asyncio.Lock()
 
     @property
     def is_healthy(self) -> bool:
@@ -55,6 +69,12 @@ class _FakeClient:
             self._healthy = True
             return {"success": True}
         return {"success": False, "error": "Cookie expired - redirected to Google login page"}
+
+    async def check_account(self) -> dict:
+        self.check_account_calls += 1
+        if self.on_check_account is not None:
+            self.on_check_account()
+        return {"valid": self._healthy}
 
     async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
                        extended_thinking=False) -> dict:
@@ -434,3 +454,275 @@ def test_real_failures_still_count_against_the_account():
     assert account.error_count == 3
     assert account.status == AccountStatus.EXPIRED
     assert account.active_requests == 0
+
+
+# ---------------------------------------------------------------------------
+# H1（reviewer FIX_FIRST 复核）：自愈被取消时 healing 标志必须清掉，
+# 即使清标志那一刻 self._cond 正被别的协程占着
+# ---------------------------------------------------------------------------
+
+def test_healing_flag_cleared_even_when_cancelled_while_finally_waits_on_contended_lock():
+    """H1：account.healing 只在 `_try_heal_unhealthy` 的 finally 里被清掉。旧实现把清
+    标志这一步塞进了 `async with self._cond:` 内部——Starlette 客户端断连触发的取消会
+    在这个锁竞争点上直接把协程打断，标志永远清不掉，自愈通道被永久焊死：单账号池从此
+    永久 503，且没有任何后续请求能再触发一次 reload_cookies —— 这正是 issue #11 本身，
+    被我们自己的修复以另一种形态重新引入（reviewer 复核发现）。
+    修复后：healing=False 是不需要锁的普通属性写，必须无条件跑到，不依赖抢赢这把锁；
+    需要锁的记账部分（冷却/notify_all）做成不阻塞取消传播的 best-effort。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+    client.reload_delay = 0.3
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        account = pool.accounts[0]
+
+        async with pool._cond:
+            heal_target = pool._pick_heal_candidate()
+        assert heal_target is account
+        assert account.healing is True
+
+        heal_task = asyncio.create_task(pool._try_heal_unhealthy(heal_target))
+        # 放行到 reload_cookies 的网络等待里（此时 pool._cond 已经不在它手上了）
+        await asyncio.sleep(0.05)
+
+        # 制造"finally 里要用的锁正被别人占着"的场景：把 pool._cond 死死占住
+        lock_free = asyncio.Event()
+
+        async def _hold_lock():
+            async with pool._cond:
+                await lock_free.wait()
+
+        holder = asyncio.create_task(_hold_lock())
+        await asyncio.sleep(0.03)  # 确保 holder 先拿到锁
+
+        heal_task.cancel()
+        # 给事件循环几个节拍去投递取消、跑 finally 里不需要锁的同步部分
+        await asyncio.sleep(0.03)
+
+        healing_while_lock_still_contended = account.healing
+
+        lock_free.set()
+        await holder
+        with pytest.raises(asyncio.CancelledError):
+            await heal_task
+
+        return pool, account, healing_while_lock_still_contended
+
+    pool, account, healing_while_lock_still_contended = asyncio.run(_run())
+
+    assert healing_while_lock_still_contended is False, (
+        "healing 标志必须在取消发生时立刻清掉，不能等到抢回被占用的锁"
+    )
+    # 没被判成"失败"（取消不是失败）：不该背上 60s 冷却
+    assert account.heal_cooldown_until == 0.0
+
+    # 自愈通道没被焊死：下一次请求必须能再次触发 reload_cookies 并成功
+    result = asyncio.run(pool.generate("hi", "gemini-pro"))
+    assert client.reload_calls == 2, "被取消的那次也算一次调用，第二次应是全新的自愈尝试"
+    assert result["text"] == "ok"
+
+
+def test_acquire_timeout_bounds_heal_duration_and_shields_background_completion():
+    """M1（reviewer MEDIUM）：acquire() 的总耗时不该被自愈的网络 I/O（最长 ~60s）顶穿
+    operator 配置的 acquire_timeout；同时 shield 必须保证背后的自愈没有被腰斩——它会在
+    后台跑完，healing 标志与 client 健康状态仍会被正确落盘。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+    client.reload_delay = 0.5
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=0.1)
+        t0 = time.monotonic()
+        with pytest.raises(RuntimeError) as ei:
+            await pool.acquire()
+        elapsed = time.monotonic() - t0
+        account = pool.accounts[0]
+        # 等后台自愈（被 shield 保护，acquire() 超时不取消它）真正跑完
+        await asyncio.sleep(client.reload_delay + 0.2)
+        return elapsed, str(ei.value), account
+
+    elapsed, msg, account = asyncio.run(_run())
+
+    assert elapsed < 0.5, (
+        f"acquire() 耗时 {elapsed:.2f}s，被自愈的网络 I/O 顶穿了 acquire_timeout(0.1s)"
+    )
+    assert msg == NO_HEALTHY_ACCOUNT_MSG
+    assert client.reload_calls == 1
+    # 后台自愈跑完之后：flag 清掉、client 真的变健康了（shield 生效，没被腰斩）
+    assert account.healing is False
+    assert account.client.is_healthy is True
+
+
+def test_heal_skipped_entirely_when_acquire_budget_already_exhausted():
+    """M1 边界：acquire_timeout 预算已经耗尽时，压根不发起自愈——发起了也没意义
+    （调用方早就不想再等了），直接原样归还单飞标志、报出准确错误。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=-1.0)
+        with pytest.raises(RuntimeError) as ei:
+            await pool.acquire()
+        return str(ei.value), pool.accounts[0]
+
+    msg, account = asyncio.run(_run())
+    assert msg == NO_HEALTHY_ACCOUNT_MSG
+    assert client.reload_calls == 0, "预算已耗尽不该再发起自愈"
+    assert account.healing is False
+
+
+# ---------------------------------------------------------------------------
+# H2（reviewer FIX_FIRST）：EXPIRED + ACTIVE-不健康 混合场景
+# 不得再对 EXPIRED 账号做持锁 check_account()
+# ---------------------------------------------------------------------------
+
+def test_unhealthy_active_with_expired_sibling_does_not_hit_locked_check_account():
+    """H2：池里同时有 EXPIRED 账号和 ACTIVE-但-不健康 账号时，F1 收紧后的
+    has_available_account 判定会让请求撞进"没有可用账号"分支——修复前会在这里对 EXPIRED
+    账号跑持锁的 check_account()：没有冷却、没有单飞，逐请求触发，等于给 Google 开了个
+    敲门风暴，还把整个池（包括本该走的 F2 自愈路径）一起卡住。修复后必须绕开
+    _try_recover_expired()，直接走 F2 已有的、锁外/单飞/带冷却的自愈路径。"""
+    unhealthy = _FakeClient(healthy=False, reload_succeeds=True)
+    expired_sibling = _FakeClient(healthy=True)
+
+    async def _run():
+        pool = _make_pool([unhealthy, expired_sibling], acquire_timeout=5.0)
+        pool.accounts[1].status = AccountStatus.EXPIRED
+
+        lock_states = []
+        unhealthy.on_reload = lambda: lock_states.append(pool._cond.locked())
+
+        result = await pool.generate("hi", "gemini-pro")
+        return result, expired_sibling.check_account_calls, lock_states
+
+    result, check_calls, lock_states = asyncio.run(_run())
+
+    assert check_calls == 0, "ACTIVE-不健康 分支不该再碰 EXPIRED 账号的 check_account()（H2）"
+    assert lock_states == [False], "reload_cookies 仍必须锁外调用"
+    assert result["text"] == "ok"
+
+
+def test_all_expired_pool_still_recovers_via_check_account():
+    """零回归：真正"一个 ACTIVE 账号都没有"（清一色 EXPIRED）时，_try_recover_expired()
+    仍要被触发且仍能救活账号——H2 只收窄了"EXPIRED + ACTIVE-不健康混合"这一种场景，
+    不能连这条本来就有的恢复路径也一起关掉。"""
+    client = _FakeClient(healthy=True)
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        pool.accounts[0].status = AccountStatus.EXPIRED
+        result = await pool.generate("hi", "gemini-pro")
+        return result, client.check_account_calls, pool.accounts[0]
+
+    result, check_calls, account = asyncio.run(_run())
+    assert check_calls == 1
+    assert account.status == AccountStatus.ACTIVE
+    assert result["text"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# M2：release_disconnected() 必须与 release(success=True) 语义可区分，
+# 且断连仍会唤醒排队者
+# ---------------------------------------------------------------------------
+
+def test_disconnect_release_is_neutral_not_success():
+    """M2：区分 release_disconnected() 与 release(success=True)——先用一次真实失败把
+    consecutive_failures 顶到 1，再制造一次断连；若断连误走了 success=True 的清零逻辑，
+    这个值会被冲掉，旧测试断言不出这个差异（只看 status/error_count 两边都是 0，看不出
+    区别）。"""
+    class _FlakyThenDisconnectClient(_FakeClient):
+        def __init__(self):
+            super().__init__(healthy=True)
+            self._calls = 0
+
+        async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                           extended_thinking=False):
+            self._calls += 1
+            if self._calls == 1:
+                raise ValueError("upstream exploded")
+            raise asyncio.CancelledError()
+
+    async def _run():
+        pool = _make_pool([_FlakyThenDisconnectClient()])
+        account = pool.accounts[0]
+
+        with pytest.raises(ValueError):
+            await pool.generate("hi", "gemini-pro")
+        assert account.consecutive_failures == 1
+
+        try:
+            await pool.generate("hi", "gemini-pro")
+        except asyncio.CancelledError:
+            pass
+        return account
+
+    account = asyncio.run(_run())
+    assert account.consecutive_failures == 1, (
+        "断连必须走中性释放：不能把已有的真实失败计数清零（那是 success=True 的语义）"
+    )
+    assert account.status == AccountStatus.ACTIVE
+    assert account.active_requests == 0
+
+
+def test_disconnect_wakes_a_queued_waiter():
+    """M2：断连必须唤醒排队等待者（不只是归还槽位）——否则排队请求会一路等到
+    acquire_timeout 超时才醒，即便槽位其实已经空出来了。"""
+    client = _FakeClient(healthy=True)
+
+    async def _run():
+        pool = _make_pool([client], max_concurrent=1, acquire_timeout=5.0)
+        holder = await pool.acquire()  # 占住唯一槽位
+        assert holder.active_requests == 1
+
+        waiter = asyncio.create_task(pool.acquire())
+        await asyncio.sleep(0.05)
+        assert not waiter.done(), "唯一槽位被占，等待者理应排队"
+
+        await pool.release_disconnected(holder)  # 模拟断连归还
+        second = await asyncio.wait_for(waiter, timeout=1.0)
+        return second
+
+    account = asyncio.run(_run())
+    assert account.active_requests == 1
+
+
+# ---------------------------------------------------------------------------
+# M3（reviewer MEDIUM）：池级自愈必须过 client 自己的 _heal_lock
+# ---------------------------------------------------------------------------
+
+def test_pool_heal_routes_through_clients_own_heal_lock():
+    """M3：池级自愈必须过 client 自己的 _heal_lock，不能绕开它去裸调 reload_cookies()——
+    否则池级单飞（Account.healing）和 client 自己内部的自愈（generate/generate_stream
+    开头那段）用的是两把不同的锁，能在同一个 client 上并发跑两次 reload_cookies，
+    互相踩会话状态（_http 被关两次、cookie/token 写串）。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+    heal_lock_states = []
+    client.on_reload = lambda: heal_lock_states.append(client._heal_lock.locked())
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        return await pool.generate("hi", "gemini-pro")
+
+    result = asyncio.run(_run())
+    assert result["text"] == "ok"
+    # reload_cookies 被调用的那一刻，client 自己的 _heal_lock 必须已经被池级自愈持有
+    assert heal_lock_states == [True], "池级自愈没有过 client._heal_lock（M3）"
+
+
+def test_pool_heal_double_checks_after_acquiring_client_lock():
+    """M3 双重检查：拿到 client._heal_lock 后如果发现 client 已经被治好了（比如 client
+    自己另一条调用链先跑赢了），就不该再跑一次 reload_cookies()。"""
+    client = _FakeClient(healthy=False, reload_succeeds=True)
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        async with pool._cond:
+            heal_target = pool._pick_heal_candidate()
+
+        async with client._heal_lock:
+            # 模拟别的路径已经在我们前面把它治好了
+            client._healthy = True
+
+        return await pool._try_heal_unhealthy(heal_target)
+
+    ok = asyncio.run(_run())
+    assert ok is True
+    assert client.reload_calls == 0, "client 已经健康时不该再跑一次 reload_cookies（M3 双重检查）"

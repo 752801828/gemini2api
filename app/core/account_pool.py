@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # 又平白抬高对 Google 的敲门频率（风控面）。
 HEAL_RETRY_COOLDOWN = 60.0
 
+# healing 单飞标志的陈旧阈值（issue #11 H1 belt-and-braces）。reload_cookies 是 60s 级
+# 网络 I/O，正常情况下这个标志活不过那么久；万一某条路径（未来的新 bug）没能在结束时
+# 清掉它，超过这个阈值就当陈旧、可回收 —— 双保险，绝不指望它成为常态触发路径。
+HEALING_STALE_SECONDS = 120.0
+
 
 def _is_5xx(exc: Exception) -> bool:
     """判断异常是否为 5xx（含 Google 503 限流），这类可换账号 failover 重试。"""
@@ -70,6 +75,9 @@ class Account:
     # 会话自愈（reload_cookies）的单飞标志：为真表示已有请求在锁外跑自愈，其余并发请求
     # 不再重复触发（issue #11 F2）
     healing: bool = False
+    # healing 置为 True 时的 loop.time() 时间戳，供 _pick_heal_candidate() 做陈旧回收
+    # 判断（issue #11 H1 belt-and-braces）
+    healing_started_at: float = 0.0
     # 自愈失败后的冷却截止时间戳（loop.time()）；冷却期内不再触发自愈
     heal_cooldown_until: float = 0.0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -220,12 +228,25 @@ class AccountPool:
         准确报错，而不是排队陪等一次 60s 级网络 I/O（issue #11 F2）。
         失败过的账号在 HEAL_RETRY_COOLDOWN 内不再被选中，避免永久失效的账号把每个请求
         都变成一次对 Google 的 RotateCookies。
+
+        H1 belt-and-braces：healing 标志本身已经被设计成不依赖锁就能清掉（见
+        _try_heal_unhealthy 的 finally），但这里仍加一道陈旧回收保险——万一某条未来路径
+        还是没能清掉它，超过 HEALING_STALE_SECONDS 就当作陈旧、重新可选，绝不让单个 bug
+        把自愈通道永久焊死。
         """
         now = asyncio.get_event_loop().time()
         for a in self._unhealthy_active():
-            if a.healing or a.heal_cooldown_until > now:
+            if a.healing:
+                if now - a.healing_started_at <= HEALING_STALE_SECONDS:
+                    continue
+                logger.warning(
+                    f"Account {a.id} healing flag stale for "
+                    f"{now - a.healing_started_at:.0f}s, reclaiming it (H1 staleness guard)"
+                )
+            elif a.heal_cooldown_until > now:
                 continue
             a.healing = True
+            a.healing_started_at = now
             return a
         return None
 
@@ -238,28 +259,63 @@ class AccountPool:
 
         用 reload_cookies 而不是 check_account：后者只拿现有 cookie 重读，不会轮换，
         救不了已经被 Google 轮换掉的 PSIDTS（这正是 issue #11 里"换新 cookie 才恢复"的成因）。
+
+        M3：过 client 自己的 _heal_lock（而不是只靠池级 Account.healing）——两把锁保护的
+        并发面不一样：Account.healing 只挡同一账号的池级并发请求，挡不住 client 内部
+        generate()/generate_stream() 开头那段自愈逻辑走另一条调用链同时跑 reload_cookies，
+        两次并发 reload_cookies 会互相踩会话状态（_http 被关两次、cookie/token 写串）。
+        拿到 _heal_lock 后二次确认健康状态：可能在等锁期间已经被另一条路径治好了。
         """
         client = account.client
         ok = False
+        cancelled = False
         try:
             if client is not None:
-                result = await client.reload_cookies()
-                ok = bool(result and result.get("success")) and client.is_healthy
+                async with client._heal_lock:
+                    if client.is_healthy:
+                        ok = True
+                    else:
+                        result = await client.reload_cookies()
+                        ok = bool(result and result.get("success")) and client.is_healthy
+        except asyncio.CancelledError:
+            # H1（reviewer FIX_FIRST）：取消不是"自愈失败"——不知道 reload_cookies 本来
+            # 会不会成功，不该给账号判 HEAL_RETRY_COOLDOWN。跳过下面需要锁的记账部分，
+            # 只清标志、原样把取消传播出去。
+            cancelled = True
+            raise
         except Exception as e:
             logger.warning(f"Account {account.id} self-heal failed: {e}")
         finally:
-            async with self._cond:
-                account.healing = False
-                if ok:
-                    account.consecutive_failures = 0
-                    logger.info(f"Account {account.id} self-healed: cookies reloaded")
-                    # 多出了可用槽位，唤醒所有排队者重新评估
-                    self._cond.notify_all()
-                else:
-                    account.heal_cooldown_until = (
-                        asyncio.get_event_loop().time() + HEAL_RETRY_COOLDOWN
-                    )
+            # H1：healing 标志是不需要锁的普通属性写，必须无条件、同步地放在这里——不能
+            # 包进下面 `async with self._cond:` 里面。Starlette 客户端断连触发的取消会在
+            # finally 内的每个 await 点反复注入 CancelledError；若清标志这一步本身要先抢一把
+            # 被占用的锁，取消就能让它永远跑不到，自愈通道被永久焊死——等于把 issue #11
+            # 换个姿势报出来（这正是本次修复要堵的洞）。
+            account.healing = False
+            if not cancelled:
+                heal_cooldown_until = (
+                    0.0 if ok else asyncio.get_event_loop().time() + HEAL_RETRY_COOLDOWN
+                )
+                # 计数器归零/冷却时间/notify_all 都需要锁，做成 best-effort：shield 保证
+                # "这次调用又被取消一次"也不会让它半途而废，但也绝不会因为抢不到锁就拖住
+                # 取消的传播——拿不到就在后台慢慢拿，前台该抛的取消照抛不误。
+                await asyncio.shield(self._finish_heal(account, ok, heal_cooldown_until))
         return ok
+
+    async def _finish_heal(self, account: Account, ok: bool, heal_cooldown_until: float) -> None:
+        """_try_heal_unhealthy 结果落盘中需要锁的部分（计数器 + notify_all）。
+
+        故意与 healing 标志的清除（不需要锁）分开：调用方用 asyncio.shield 包裹本函数，
+        取消不会让它半途而废，也不会阻塞取消本身的传播。
+        """
+        async with self._cond:
+            if ok:
+                account.consecutive_failures = 0
+                logger.info(f"Account {account.id} self-healed: cookies reloaded")
+                # 多出了可用槽位，唤醒所有排队者重新评估
+                self._cond.notify_all()
+            else:
+                account.heal_cooldown_until = heal_cooldown_until
 
     async def _try_recover_expired(self):
         """无可用账号时，尝试恢复 EXPIRED 账号（已持有锁）。"""
@@ -308,24 +364,33 @@ class AccountPool:
                         for a in self._accounts
                     )
                     if not has_available_account:
-                        await self._try_recover_expired()
-                        account = self._find_available()
-                        if account is not None:
-                            account.active_requests += 1
-                            account.last_used = datetime.now(timezone.utc)
-                            return account
-                        if self._unhealthy_active():
-                            # F2：ACTIVE 但会话失效 → 先在**锁外**试一次 reload_cookies 自愈。
-                            # 这里只挑目标并打单飞标志，随后 break 出 async with 释放锁再动网络。
-                            if not heal_attempted:
-                                heal_target = self._pick_heal_candidate()
-                                if heal_target is not None:
-                                    break
-                            # 自愈已试过/正被别的请求跑/还在冷却 → F3：给出准确文案，
-                            # 让 classify_error 映射成 503，而不是会诱发无限重试的 529。
-                            raise RuntimeError(NO_HEALTHY_ACCOUNT_MSG)
-                        # 救不活，且没有可用账号 → 排队也没意义，立即报错
-                        raise RuntimeError("No available accounts")
+                        unhealthy = self._unhealthy_active()
+                        if not unhealthy:
+                            # 真正的"一个 ACTIVE 账号都没有"（其余是 EXPIRED/DISABLED）：
+                            # 这是修复前就存在的持锁网络恢复路径，不是本次改动引入的新东西，
+                            # 维持原样——check_account 比 reload_cookies 轻量得多，且只有在
+                            # 彻底没有 ACTIVE 账号时才会走到这里。
+                            await self._try_recover_expired()
+                            account = self._find_available()
+                            if account is not None:
+                                account.active_requests += 1
+                                account.last_used = datetime.now(timezone.utc)
+                                return account
+                            raise RuntimeError("No available accounts")
+                        # H2（reviewer FIX_FIRST）：这里绝不能再调 _try_recover_expired()。
+                        # F1 把 has_available_account 的判定收紧成"ACTIVE 且健康"后，池里
+                        # 只要同时存在 EXPIRED 账号和 ACTIVE-但-不健康 账号，就会撞进这个分支；
+                        # _try_recover_expired 对每个 EXPIRED 账号跑 check_account() 是持锁
+                        # 网络 I/O，没有冷却/单飞保护，会把整个池卡住，还对 Google 形成
+                        # 逐请求重试的敲门风暴。ACTIVE-但-不健康 的账号已经有 F2 那条锁外、
+                        # 单飞、带冷却的自愈路径，直接走它，不碰 EXPIRED 账号的恢复。
+                        if not heal_attempted:
+                            heal_target = self._pick_heal_candidate()
+                            if heal_target is not None:
+                                break
+                        # 自愈已试过/正被别的请求跑/还在冷却 → F3：给出准确文案，
+                        # 让 classify_error 映射成 503，而不是会诱发无限重试的 529。
+                        raise RuntimeError(NO_HEALTHY_ACCOUNT_MSG)
 
                     # 有可用账号但都满载 → 排队等可用槽位，而非直接拒绝
                     remaining = deadline - loop.time()
@@ -344,9 +409,23 @@ class AccountPool:
 
             # ↑ 到这里锁已释放。reload_cookies 是 60s 级网络 I/O，绝不能持锁跑。
             heal_attempted = True
-            await self._try_heal_unhealthy(heal_target)
+            # M1（reviewer MEDIUM）：不能让自愈把 acquire() 的总耗时顶穿 operator 配置的
+            # acquire_timeout（最多可能多等一整个 reload_cookies 时长，~60s）。用剩余预算
+            # 给它设一个硬上限；预算已经耗尽就干脆不发起，直接报准确错误。
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                heal_target.healing = False
+                raise RuntimeError(NO_HEALTHY_ACCOUNT_MSG)
+            try:
+                # shield：即使这次 wait_for 超时/被取消，_try_heal_unhealthy 也会在后台
+                # 跑完——healing 标志的清除、冷却时间的落盘都不会因为我们不再等它而丢失。
+                await asyncio.wait_for(
+                    asyncio.shield(self._try_heal_unhealthy(heal_target)), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                pass  # 没在预算内跑完：这次 acquire() 按预算诚实超时，不再空等
             # 回到外层循环重新取锁、重新 _find_available()：
-            # 自愈成功 → 直接拿到槽位；失败 → 下一轮走上面的 NO_HEALTHY_ACCOUNT_MSG 分支。
+            # 自愈成功 → 直接拿到槽位；失败/超预算 → 下一轮走上面的 NO_HEALTHY_ACCOUNT_MSG 分支。
 
     async def release(self, account: Account, success: bool, cooldown: bool = False):
         async with self._cond:
