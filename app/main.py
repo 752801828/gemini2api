@@ -463,6 +463,19 @@ async def index_page():
     return HTMLResponse("<h1>Panel not found</h1>", status_code=404)
 
 
+@app.get("/")
+async def root_page():
+    """裸地址 ``/`` 是管理员实际打开/收藏的入口，必须和 /index.html 同样每次回源校验。
+
+    没有这条路由时 ``/`` 会落到末尾的 StaticFiles 挂载（html=True 会替我们返回
+    index.html），但 starlette 传给 ``get_response`` 的 path 是 ``"."`` —— 不以
+    .js/.css/.html/.json 结尾，``RevalidatingStaticFiles`` 因此不会加 Cache-Control，
+    浏览器就按启发式新鲜度缓存住这份写着 ``app.js?v=`` 版本串的 HTML，升级后整套前端
+    被钉在旧版本上。这正是加 no-cache 想根治的问题，却在最常用的那个 URL 上漏掉了。
+    """
+    return await index_page()
+
+
 API_DIR = Path(__file__).parent.parent / "api"
 
 
