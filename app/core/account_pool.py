@@ -7,7 +7,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app.core.gemini_client import GeminiWebClient, HTTPStatusError
+from app.core.gemini_client import GeminiWebClient, HTTPStatusError, NO_HEALTHY_ACCOUNT_MSG
 from app.config import settings
 from app.core.usage_metrics import live_metrics
 from app.utils.atomic_io import atomic_write_text
@@ -191,6 +191,18 @@ class AccountPool:
             return self._pick_round_robin(pool)
         return self._pick_failover(pool)
 
+    def _unhealthy_active(self) -> list[Account]:
+        """status 仍是 ACTIVE、但 client 会话已失效的账号（需已持有 self._cond 锁）。
+
+        这些账号对 _find_available() 不可见（它要求 client.is_healthy），却又不是 EXPIRED，
+        是 issue #11 里池"永久卡死"的那批账号。
+        """
+        return [
+            a for a in self._accounts
+            if a.status == AccountStatus.ACTIVE
+            and a.client is not None and not a.client.is_healthy
+        ]
+
     async def _try_recover_expired(self):
         """无可用账号时，尝试恢复 EXPIRED 账号（已持有锁）。"""
         for a in self._accounts:
@@ -221,17 +233,29 @@ class AccountPool:
                     raise RuntimeError("No more accounts to failover to")
 
                 # 没有空闲槽位。区分两种情况：
-                #   ① 有 ACTIVE 账号但都满载 → 排队等 release 唤醒（不要跑网络恢复，
+                #   ① 有「可用账号」但都满载 → 排队等 release 唤醒（不要跑网络恢复，
                 #      否则高并发满载时每次唤醒都串行跑 check_account 把整个池卡死）
-                #   ② 完全没有 ACTIVE 账号 → 才尝试救活 EXPIRED（网络 I/O，低频路径）
-                has_active = any(a.status == AccountStatus.ACTIVE for a in self._accounts)
-                if not has_active:
+                #   ② 一个可用账号都没有 → 才尝试救活（网络 I/O，低频路径）
+                # F1（issue #11）：这里的谓词必须与 _find_available() 完全一致——也要求
+                # client.is_healthy。否则 status=ACTIVE 但会话已失效的账号会被当成"只是忙"，
+                # 每个请求都白等满 acquire_timeout(60s) 再报 "All accounts busy"，而实际
+                # 占用槽位是 0；那条 529 是假的，且因为下面的恢复路径永远够不着而变成永久卡死。
+                has_available_account = any(
+                    a.status == AccountStatus.ACTIVE
+                    and a.client is not None and a.client.is_healthy
+                    for a in self._accounts
+                )
+                if not has_available_account:
                     await self._try_recover_expired()
                     account = self._find_available()
                     if account is not None:
                         account.active_requests += 1
                         account.last_used = datetime.now(timezone.utc)
                         return account
+                    # F3：区分"没账号可用"和"账号还在但会话失效"。后者槽位全空、排队无意义，
+                    # 必须给出准确文案（classify_error 映射成 503，而不是会诱发无限重试的 529）。
+                    if self._unhealthy_active():
+                        raise RuntimeError(NO_HEALTHY_ACCOUNT_MSG)
                     # 救不活，且没有 ACTIVE → 排队也没意义，立即报错
                     raise RuntimeError("No available accounts")
 

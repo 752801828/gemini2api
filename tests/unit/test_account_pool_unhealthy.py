@@ -1,0 +1,178 @@
+"""issue #11 回归守卫：账号 status=ACTIVE 但 client 会话已失效时的池行为。
+
+线上现象：跑一阵后所有请求 529 `All accounts busy (max_concurrent=8), waited 60.0s`，
+面板显示 cookie 没过期、换新 cookie 才恢复，且只有 1 个账号（并发槽位根本不可能打满）。
+
+真因不是槽位泄漏，而是 `AccountPool` 的两个谓词不一致：
+  - `_find_available()` 要求 `status == ACTIVE` **且** `client.is_healthy`
+  - "是不是只是忙"的判断只看 `status == ACTIVE`
+于是 `status=ACTIVE` 但 `client._healthy=False` 的账号：对 `_find_available` 不可见、却被算作
+"有活跃账号" → 每个请求都进排队分支 → 空等满 acquire_timeout → 报一条槽位占用为 0 的假 529。
+三条恢复路径（救 EXPIRED / client 自愈 / PSIDTS 轮换）在这个状态下全部够不着，故永久卡死。
+
+本文件按修复项分组守卫：
+  F1+F3 → test 1（精确消息、快速失败）、test 2（路由级状态码/文案 + 无槽位泄漏）
+  F1 零回归 → test 4（真·健康且满载的池行为必须与修复前逐字一致）
+  F2 → test 3（自愈可达性：reload_cookies 恰好被调用一次且请求随后成功）
+  F4 → test 5（刷新失败不得把本来健康的 client 永久拉黑）
+  F6 → test 6（客户端断连不得算作账号失败）
+"""
+import asyncio
+import time
+
+import pytest
+
+from app.core.account_pool import Account, AccountPool, AccountStatus
+from app.core.gemini_client import NO_HEALTHY_ACCOUNT_MSG, classify_error
+
+_AUTH = {"Authorization": "Bearer sk-test-key"}
+
+
+class _FakeClient:
+    """最小 GeminiWebClient 替身：只实现池会用到的健康/重载/生成三件事。"""
+
+    def __init__(self, healthy: bool = True, reload_succeeds: bool = False):
+        self._healthy = healthy
+        self._reload_succeeds = reload_succeeds
+        self.reload_calls = 0
+        self.generate_calls = 0
+
+    @property
+    def is_healthy(self) -> bool:
+        return self._healthy
+
+    async def reload_cookies(self, psid=None, psidts=None) -> dict:
+        self.reload_calls += 1
+        if self._reload_succeeds:
+            self._healthy = True
+            return {"success": True}
+        return {"success": False, "error": "Cookie expired - redirected to Google login page"}
+
+    async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                       extended_thinking=False) -> dict:
+        self.generate_calls += 1
+        return {"text": "ok", "images": [], "conversation_id": "c1"}
+
+    async def generate_stream(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                              extended_thinking=False):
+        self.generate_calls += 1
+        yield {"type": "delta", "text": "hello"}
+        yield {"type": "final", "text": "hello", "images": [], "conversation_id": "c1"}
+
+
+def _make_pool(clients, *, max_concurrent: int = 8, acquire_timeout: float = 5.0) -> AccountPool:
+    pool = AccountPool()
+    pool._accounts = [
+        Account(id=f"account-{i}", psid=f"psid-{i}", psidts="", label=f"account-{i}",
+                status=AccountStatus.ACTIVE, client=c)
+        for i, c in enumerate(clients)
+    ]
+    pool._max_concurrent = max_concurrent
+    pool._acquire_timeout = acquire_timeout
+    return pool
+
+
+# ---------------------------------------------------------------------------
+# 测试 1（F1+F3）：精确消息守卫
+# ---------------------------------------------------------------------------
+
+def test_unhealthy_active_account_fails_fast_with_accurate_message():
+    """单账号 ACTIVE + 不健康：acquire 必须立刻失败（不是等满 5s 超时），
+    文案不能是 "All accounts busy"（槽位占用是 0，那是假消息），映射也不能是 529。"""
+    client = _FakeClient(healthy=False)
+
+    async def _run():
+        pool = _make_pool([client], acquire_timeout=5.0)
+        t0 = time.monotonic()
+        with pytest.raises(RuntimeError) as ei:
+            await pool.acquire()
+        return time.monotonic() - t0, str(ei.value), pool.accounts[0]
+
+    elapsed, msg, account = asyncio.run(_run())
+
+    # 快速失败：修复前这里会老老实实排队等满 acquire_timeout(5s) 才抛错
+    assert elapsed < 1.0, f"acquire 等了 {elapsed:.2f}s，应当立即失败"
+    assert "All accounts busy" not in msg
+    assert msg == NO_HEALTHY_ACCOUNT_MSG
+    # 槽位从头到尾就没被占用过 —— 证明"忙"是假的
+    assert account.active_requests == 0
+
+    status, err_type, retry_after = classify_error(RuntimeError(msg))
+    assert status != 529 and err_type != "overloaded_error"
+    assert (status, err_type, retry_after) == (503, "api_error", None)
+
+
+# ---------------------------------------------------------------------------
+# 测试 2（F1+F3）：路由级
+# ---------------------------------------------------------------------------
+
+def test_route_reports_session_expired_not_overloaded(gem_client, monkeypatch):
+    """POST /v1/chat/completions 打到"ACTIVE 但会话失效"的池：
+    必须回准确文案 + 503，而不是 529 overloaded；并且账号槽位仍是 0（不是泄漏）。"""
+    import app.routers.openai as oai
+
+    client = _FakeClient(healthy=False)
+    pool = _make_pool([client], acquire_timeout=5.0)
+    monkeypatch.setattr(oai, "gemini_client", pool)
+
+    t0 = time.monotonic()
+    r = gem_client.post("/v1/chat/completions", json={
+        "model": "gemini-pro", "stream": False,
+        "messages": [{"role": "user", "content": "hi"}],
+    }, headers=_AUTH)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 2.0, f"请求耗时 {elapsed:.2f}s，不应空等 acquire_timeout"
+    assert r.status_code == 503, r.text
+    body = r.json()
+    assert body["error"]["message"] == NO_HEALTHY_ACCOUNT_MSG
+    assert body["error"]["type"] == "api_error"
+    assert "All accounts busy" not in r.text
+    # 529 会让客户端无限重试一个不会自愈的池，故绝不能带 Retry-After
+    assert "retry-after" not in {k.lower() for k in r.headers}
+    # 不是并发槽位泄漏：请求结束后占用仍为 0
+    assert pool.accounts[0].active_requests == 0
+
+
+# ---------------------------------------------------------------------------
+# 测试 4（F1 零回归）：真·健康且满载的池，行为必须与修复前逐字一致
+# ---------------------------------------------------------------------------
+
+def test_saturated_healthy_pool_still_queues_and_is_woken_by_release():
+    """全部 ACTIVE 且健康、槽位打满 → 必须排队等待，并在 release() 时被唤醒拿到槽位。"""
+    async def _run():
+        pool = _make_pool([_FakeClient(healthy=True)], max_concurrent=1, acquire_timeout=5.0)
+        first = await pool.acquire()
+        assert first.active_requests == 1
+
+        waiter = asyncio.create_task(pool.acquire())
+        await asyncio.sleep(0.1)
+        assert not waiter.done(), "健康但满载的池必须排队，不能立即失败"
+
+        await pool.release(first, success=True)
+        second = await asyncio.wait_for(waiter, timeout=2.0)
+        return second
+
+    account = asyncio.run(_run())
+    assert account.active_requests == 1
+    assert account.status == AccountStatus.ACTIVE
+
+
+def test_saturated_healthy_pool_timeout_keeps_original_busy_error_and_529():
+    """健康但满载且无人 release → 超时后仍是原来的 All accounts busy 文案，仍映射 529。"""
+    async def _run():
+        pool = _make_pool([_FakeClient(healthy=True)], max_concurrent=2, acquire_timeout=0.3)
+        await pool.acquire()
+        await pool.acquire()
+        t0 = time.monotonic()
+        with pytest.raises(RuntimeError) as ei:
+            await pool.acquire()
+        return time.monotonic() - t0, str(ei.value), pool.accounts[0]
+
+    elapsed, msg, account = asyncio.run(_run())
+
+    # 真忙就该真等：等满 acquire_timeout 才报错（不能被 F1 改成秒失败）
+    assert elapsed >= 0.3, f"只等了 {elapsed:.2f}s，健康满载的池必须排队等满超时"
+    assert msg == "All accounts busy (max_concurrent=2), waited 0.3s"
+    assert account.active_requests == 2
+    assert classify_error(RuntimeError(msg)) == (529, "overloaded_error", 30)

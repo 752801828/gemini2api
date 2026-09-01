@@ -46,6 +46,12 @@ _POOL_EXHAUSTED_HINTS = (
 # 池打满时建议客户端等待的秒数（排队时长无法精确预测，给一个保守的固定值）。
 POOL_EXHAUSTED_RETRY_AFTER = 30
 
+# acquire() 在「账号 status 还是 ACTIVE、但其 client 会话已失效」时抛出的消息（issue #11）。
+# 这**不是**池打满：并发槽位是空的，排队再久也不会好转，只有刷新/更换 Cookie 才能恢复。
+# 故映射成 503 api_error 而不是 529 overloaded_error —— 529 的语义是"过载了，等会儿再来"，
+# 会让所有客户端不停重试一个永远不会自行恢复的池，还把真实原因（会话过期）藏了起来。
+NO_HEALTHY_ACCOUNT_MSG = "No healthy account (session expired, cookie refresh required)"
+
 
 def classify_error(exc: Exception) -> tuple[int, str, int | None]:
     """把 generate()/generate_stream() 抛出的异常统一映射成
@@ -68,6 +74,9 @@ def classify_error(exc: Exception) -> tuple[int, str, int | None]:
         return status, error_type, None
     if isinstance(exc, RuntimeError):
         msg = str(exc)
+        # 先判"会话失效"再判"池打满"：前者槽位是空的，重试不会好转，529 是误导（issue #11）。
+        if NO_HEALTHY_ACCOUNT_MSG in msg:
+            return 503, "api_error", None
         if any(hint in msg for hint in _POOL_EXHAUSTED_HINTS):
             return 529, "overloaded_error", POOL_EXHAUSTED_RETRY_AFTER
         return 500, "api_error", None
