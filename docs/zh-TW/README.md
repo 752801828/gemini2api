@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.36-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.37-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -61,6 +61,7 @@
 
 | 日期 | 更新內容 |
 |------|----------|
+| 2026-08-30 18:20:00 | v1.6.37 - 🩺 修復帳號池永久卡死並誤報「All accounts busy」（issue #11）：工作階段失效的帳號此前會讓每個請求空等 60 秒並回傳錯誤的 529，現改為立即回傳準確的 503 並**自動嘗試重載 cookie 自癒**；用戶端斷線不再計為帳號失敗；cookie 重載失敗不再永久封鎖健康帳號 |
 | 2026-08-28 19:40:00 | v1.6.36 - 🚨 OpenAI 串流上游錯誤不再偽裝成正常回答（改發標準 error 幀，客戶端可正確拋錯重試）；上游 4xx 錯誤類型細化；Anthropic `citations` 欄位在串流/非串流間對齊；非字串 content 不再觸發 500 |
 | 2026-08-28 17:30:00 | v1.6.35 - 🛠️ 協定一致性與健壯性大修：修復生圖意圖誤判導致**客戶端工具被靜默丟棄**（四協定共用）、上游錯誤偽裝成正常回答、`HTTPStatusError` 逃逸成裸 500（池滿改 529+Retry-After）、`/v1/responses` 與 native Gemini buffered 分支缺失的串流保活、原生 Gemini 不認官方 SDK camelCase 報文、OpenAI `tool_calls` 被丟棄、第三方 Anthropic 轉發工具迴圈第二輪硬失敗，以及 Anthropic 回應結構對齊 |
 | 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic 協定細節打磨：回應補上規範的 `stop_sequence` 欄位並同步五語言 API 文件；工具呼叫區塊 name 為 null 時不再渲染成 None；斷線保活守衛補異常取回；並加固工具渲染格式與斷線取消的測試覆蓋 |
@@ -70,7 +71,6 @@
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 模型測試面板新增「思考」開關：勾選後對 Gemini 開啟擴展思考，思考過程以可折疊塊顯示在答案上方 |
 | 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 擴展思考：`reasoning_effort` 開啟，思考過程作為 reasoning_content 返回；預設開可一鍵關、失敗自動退回，不影響普通聊天；並修正 flash-lite 免費檔 ID |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最輕量的 Flash-Lite 檔（3.5 Flash-Lite），在 Pro/Flash 被限額時仍有可用模型可選（內部按帳號真實模型動態映射，沿用固定公開名） |
-| 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 與 Favicon：左上角圖示更換為自訂品牌 Logo 圖片（並壓縮至 128×128、約 16KB，較原圖縮小約 97%）；管理面板與登入頁新增瀏覽器分頁圖示（Favicon，使用同一 Logo） |
 
 ---
 

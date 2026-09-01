@@ -60,6 +60,7 @@
 
 | Date | Update |
 |------|--------|
+| 2026-08-30 18:20:00 | v1.6.37 - 🩺 Fix the account pool wedging permanently and mis-reporting "All accounts busy" (issue #11): an account whose session expired made every request wait the full 60s and return a bogus 529; it now fails fast with an accurate 503 and **automatically attempts a cookie reload to self-heal**; a client disconnect is no longer counted as an account failure (three Stop clicks could kill a single-account pool); a failed cookie reload no longer permanently downs a healthy account |
 | 2026-08-28 19:40:00 | v1.6.36 - 🚨 OpenAI streaming no longer disguises upstream errors as a successful answer (a standard `error` frame is emitted so SDK clients raise and can retry); finer error types for upstream 4xx; the Anthropic `citations` field is now consistent between streaming and non-streaming; a non-string `content` no longer causes a 500 |
 | 2026-08-28 17:30:00 | v1.6.35 - 🛠️ Protocol-conformance and robustness overhaul: fixed image-intent false positives that **silently dropped client tools** (shared by all four protocols), upstream errors masquerading as normal answers, `HTTPStatusError` escaping as bare 500s (pool-exhausted now 529 + Retry-After), missing keepalive on the `/v1/responses` and native-Gemini buffered branches, the native Gemini router rejecting the official SDK's camelCase payloads, OpenAI `tool_calls` being dropped, the third-party Anthropic forwarder breaking tool loops after round 1, and Anthropic response-shape conformance (no more non-standard image block or null noise) |
 | 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic protocol polish: responses now include the spec's `stop_sequence` field (documented across all five API docs); a null tool-call `name` no longer renders as the Python literal None; the disconnect keepalive guard now retrieves task exceptions; plus hardened tests for the tool rendering format and disconnect cancellation |
@@ -69,7 +70,6 @@
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 Playground 'Thinking' toggle: enable Gemini extended thinking from the model-testing panel; the reasoning shows as a collapsible block above the answer |
 | 2026-08-14 21:00:00 | v1.6.29 - 🧠 Native Gemini extended thinking: send `reasoning_effort` to enable thinking on pro/flash/flash-lite, returned as reasoning_content; default-on, one-click disable, auto-fallback so normal chat is unaffected; also fixed the flash-lite free-tier model id |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 New gemini-flash-lite model: exposes Gemini's lightest Flash-Lite tier (3.5 Flash-Lite), so there's still a usable model when Pro/Flash are rate-limited (mapped per-account to the real model behind the fixed public name) |
-| 2026-07-25 09:50:00 | v1.6.27 - 🎨 Admin panel brand logo & favicon: replaced the top-left icon with a custom brand logo image (compressed to 128×128, ~16KB, ~97% smaller than the original); added a browser-tab favicon to the admin panel and login page (same logo) |
 
 ---
 

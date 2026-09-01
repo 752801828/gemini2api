@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.36-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.37-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -61,6 +61,7 @@
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-08-30 18:20:00 | v1.6.37 - 🩺 修复账号池永久卡死并误报「All accounts busy」（issue #11）：会话失效的账号此前会让每个请求空等 60 秒并返回错误的 529，现改为立即返回准确的 503 并**自动尝试重载 cookie 自愈**；客户端断连不再被计为账号失败（点 3 次「停止」曾能让单账号池瘫痪）；cookie 重载失败不再永久拉黑健康账号 |
 | 2026-08-28 19:40:00 | v1.6.36 - 🚨 OpenAI 流式上游错误不再伪装成正常回答（改发标准 error 帧，客户端可正确抛错重试）；上游 4xx 错误类型细化；Anthropic `citations` 字段在流式/非流式间对齐；非字符串 content 不再触发 500 |
 | 2026-08-28 17:30:00 | v1.6.35 - 🛠️ 协议一致性与健壮性大修：修复生图意图误判导致**客户端工具被静默丢弃**（四协议共用）、上游错误伪装成正常回答、`HTTPStatusError` 逃逸成裸 500（池满改 529+Retry-After）、`/v1/responses` 与 native Gemini buffered 分支缺失的流式保活、原生 Gemini 不认官方 SDK camelCase 报文、OpenAI `tool_calls` 被丢弃、第三方 Anthropic 转发工具循环第二轮硬失败，以及 Anthropic 响应结构对齐（去掉非标准 image 块与 null 噪音） |
 | 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic 协议细节打磨：响应补上规范的 `stop_sequence` 字段并同步五语言 API 文档；工具调用块 name 为 null 时不再渲染成 None；断连保活守卫补异常取回；并加固工具渲染格式与断连取消的测试覆盖 |
@@ -70,7 +71,6 @@
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 模型测试面板新增「思考」开关：勾选后对 Gemini 开启扩展思考，思考过程以可折叠块显示在答案上方 |
 | 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 扩展思考：`reasoning_effort` 开启，思考过程作为 reasoning_content 返回；默认开可一键关、失败自动退回，不影响普通聊天；并修正 flash-lite 免费档 ID |
 | 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最轻量的 Flash-Lite 档（3.5 Flash-Lite），在 Pro/Flash 被限额时仍有可用模型可选（内部按账号真实模型动态映射，沿用固定公开名） |
-| 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 与 Favicon：左上角图标更换为自定义品牌 Logo 图片（并压缩至 128×128、约 16KB，较原图缩小约 97%）；管理面板与登录页新增浏览器标签页图标（Favicon，使用同一 Logo） |
 
 ---
 
