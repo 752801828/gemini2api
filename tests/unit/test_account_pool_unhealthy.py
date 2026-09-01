@@ -355,3 +355,82 @@ def test_successful_reload_still_applies_new_cookies(monkeypatch):
     assert client._session_token == "NEW-TOKEN"
     assert client._psid == "new-psid"
     assert client._psidts == "new-psidts"
+
+
+# ---------------------------------------------------------------------------
+# 测试 6（F6）：客户端断连不得算作账号失败
+# ---------------------------------------------------------------------------
+
+class _DisconnectingClient(_FakeClient):
+    """模拟"请求被取消 / 客户端中途断连"的 client。"""
+
+    async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                       extended_thinking=False):
+        self.generate_calls += 1
+        raise asyncio.CancelledError()
+
+    async def generate_stream(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                              extended_thinking=False):
+        self.generate_calls += 1
+        yield {"type": "delta", "text": "partial"}
+        await asyncio.sleep(30)  # 客户端在这里断开，生成器被 aclose
+        yield {"type": "final", "text": "partial", "images": [], "conversation_id": "c1"}
+
+
+def test_client_disconnect_is_not_an_account_failure():
+    """断连 3 次（取消 + 流中途 aclose）：账号必须仍是 ACTIVE、连续失败没涨、槽位归 0。
+    修复前 finally 里统一 release(success=False)，3 次就把单账号池标成 EXPIRED
+    —— 用户点 3 次"停止"就能把服务搞挂。"""
+    client = _DisconnectingClient(healthy=True)
+
+    async def _run():
+        pool = _make_pool([client])
+        account = pool.accounts[0]
+
+        # ① 非流式：请求被取消
+        for _ in range(3):
+            try:
+                await pool.generate("hi", "gemini-pro")
+            except asyncio.CancelledError:
+                pass
+            assert account.active_requests == 0
+
+        # ② 流式：吐了一块之后客户端断连（async generator 被 aclose → GeneratorExit）
+        for _ in range(3):
+            agen = pool.generate_stream("hi", "gemini-pro")
+            first = await agen.__anext__()
+            assert first["type"] == "delta"
+            await agen.aclose()
+            assert account.active_requests == 0
+
+        return account
+
+    account = asyncio.run(_run())
+
+    assert account.status == AccountStatus.ACTIVE, "断连不该把账号标成 EXPIRED"
+    assert account.consecutive_failures == 0
+    assert account.error_count == 0
+    assert account.active_requests == 0
+
+
+def test_real_failures_still_count_against_the_account():
+    """零回归反向守卫：真正的失败仍要累加，满 3 次仍标 EXPIRED —— F6 只豁免断连。"""
+    class _BrokenClient(_FakeClient):
+        async def generate(self, prompt, model, conversation_id="", attachments=None, gem_id=None,
+                           extended_thinking=False):
+            raise ValueError("upstream exploded")
+
+    async def _run():
+        pool = _make_pool([_BrokenClient(healthy=True)])
+        account = pool.accounts[0]
+        for _ in range(3):
+            with pytest.raises(ValueError):
+                await pool.generate("hi", "gemini-pro")
+        return account
+
+    account = asyncio.run(_run())
+
+    assert account.consecutive_failures == 3
+    assert account.error_count == 3
+    assert account.status == AccountStatus.EXPIRED
+    assert account.active_requests == 0

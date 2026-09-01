@@ -373,6 +373,18 @@ class AccountPool:
             # 在高并发满载时造成无谓的反复唤醒/竞争）
             self._cond.notify(1)
 
+    async def release_disconnected(self, account: Account):
+        """中性释放：客户端断连/请求被取消时只归还槽位，不计成功也不计失败（issue #11 F6）。
+
+        断连是客户端的行为，不是账号的错。走 release(success=False) 会累加
+        consecutive_failures，满 3 次就把账号标成 EXPIRED —— 用户连点 3 次"停止"
+        就能把单账号池打死。也不能走 success=True：那会把之前真实的连续失败清零。
+        """
+        async with self._cond:
+            account.active_requests = max(0, account.active_requests - 1)
+            account.request_count += 1
+            self._cond.notify(1)
+
     def _pick_round_robin(self, available: list[Account]) -> Account:
         # 在「稳定的全量账号顺序」self._accounts 上做轮转，而不是在每次调用都变长度的
         # 过滤子集 available 上取模——后者会因 busy/cooldown/exclude 的成员变动让同一个
@@ -586,6 +598,12 @@ class AccountPool:
                 await self.release(account, success=True)
                 released = True
                 return result
+            except (asyncio.CancelledError, GeneratorExit):
+                # F6：客户端断连/取消不是账号失败，只归还槽位（否则点 3 次"停止"就能把
+                # 单账号池标成 EXPIRED）。必须放在 except Exception 之前显式处理。
+                await self.release_disconnected(account)
+                released = True
+                raise
             except Exception as e:
                 live_metrics.record_request(model, (time.time() - t0) * 1000)
                 if _is_retryable(e):
@@ -647,6 +665,12 @@ class AccountPool:
                 await self.release(account, success=True)
                 released = True
                 return
+            except (asyncio.CancelledError, GeneratorExit):
+                # F6：客户端在流中途断连（生成器被 aclose → GeneratorExit）或请求被取消，
+                # 都不是账号的错：只归还槽位，不累加 consecutive_failures/error_count。
+                await self.release_disconnected(account)
+                released = True
+                raise
             except Exception as e:
                 live_metrics.record_request(model, (time.time() - t0) * 1000)
                 # 只有「还没吐任何内容」+「可重试」+「还有别的账号」才 failover
