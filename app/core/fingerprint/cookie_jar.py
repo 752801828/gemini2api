@@ -46,12 +46,58 @@ class PersistentCookieJar:
                     result[cookie.name] = cookie.value
             return result
 
+    @staticmethod
+    def _iter_response_cookies(cookies) -> list:
+        """把响应 cookie 容器摊平成 [(name, value)]，同名跨域做确定性取舍。
+
+        curl_cffi 的 ``Cookies.items()``（经 MutableMapping → ``get()``）在同名 Cookie
+        跨域并存时抛 ``CookieConflict``：
+            Multiple cookies exist with name=NID on www.google.com and .google.com.hk
+        Google 把用户跳到国家域名（.google.com.hk/.com.tw/.co.jp …）时必现，异常会一路
+        冒到 ``_obtain_session_token`` 让 token 置空、账号被判 unhealthy（issue #10）。
+        因此这里直接遍历底层 ``http.cookiejar.CookieJar``——每个条目是独立 Cookie 对象，
+        自带 name/value/domain，天然没有同名冲突。
+
+        同名多域的取舍**只由域名决定**，不依赖遍历顺序的偶然性：优先取 domain 以
+        ``google.com`` 结尾的规范域；若候选同级（都规范或都不规范）才取最后一个。
+        """
+        jar = getattr(cookies, "jar", None)
+        if jar is None:
+            # 非 curl_cffi 容器（如普通 dict）：保持原有 items() 行为
+            return list(cookies.items())
+
+        picked: dict[str, tuple[int, str]] = {}
+        for c in jar:
+            name = getattr(c, "name", None)
+            if not name:
+                continue
+            value = getattr(c, "value", None) or ""
+            domain = (getattr(c, "domain", None) or "").strip().rstrip(".").lower()
+            rank = 1 if domain.endswith("google.com") else 0
+            prev = picked.get(name)
+            # rank 严格更高才抢占；同级则后者覆盖前者（"last wins"）。
+            # 规范域已在手时，任何非规范域都无法覆盖它 —— 与遍历顺序无关。
+            if prev is not None and prev[0] > rank:
+                continue
+            picked[name] = (rank, value)
+        return [(n, v) for n, (_, v) in picked.items()]
+
     def update_from_response(self, response) -> None:
-        """从 curl_cffi 响应中提取并存储所有 Cookie（含 Set-Cookie 头解析）"""
+        """从 curl_cffi 响应中提取并存储所有 Cookie（含 Set-Cookie 头解析）。
+
+        纵深防御：整段包 try/except，Cookie 层的任何异常只记 warning。Cookie 更新失败
+        顶多是少存一个 Cookie，绝不能再像 issue #10 那样打断调用方的 token 获取。
+        """
+        try:
+            self._update_from_response(response)
+        except Exception as e:
+            logger.warning(f"Cookie 更新失败（已忽略，不影响调用方流程）: {e}")
+
+    def _update_from_response(self, response) -> None:
         if not hasattr(response, "cookies"):
             return
         changed = False
-        for name, value in response.cookies.items():
+        for name, value in self._iter_response_cookies(response.cookies):
             with self._lock:
                 # 空值视为服务端删除指令：删除而非用空值覆盖有效凭据 Cookie。
                 if not value:
