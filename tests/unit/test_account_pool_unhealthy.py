@@ -262,3 +262,96 @@ def test_saturated_healthy_pool_timeout_keeps_original_busy_error_and_529():
     assert msg == "All accounts busy (max_concurrent=2), waited 0.3s"
     assert account.active_requests == 2
     assert classify_error(RuntimeError(msg)) == (529, "overloaded_error", 30)
+
+
+def _prepare_client_for_reload(monkeypatch, *, token_after_reload: str):
+    """造一个"当前健康、会话可用"的真 GeminiWebClient，并把 reload_cookies 里的网络动作打桩。
+
+    token_after_reload 为空串表示这次重载拿不到 SNlM0e token（重载失败）。
+    """
+    import app.core.gemini_client as gc
+
+    class _Jar:
+        def __init__(self):
+            self.sets = []
+
+        def set(self, name, value, **kwargs):
+            self.sets.append((name, value))
+
+    class _Session:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(gc, "AsyncSession", _Session)
+    client = gc.GeminiWebClient(psid="good-psid", psidts="good-psidts")
+    client._cookie_jar = _Jar()
+    client._http = _Session()
+    client._session_token = "GOOD-TOKEN"
+    client._healthy = True
+
+    async def _obtain():
+        client._session_token = token_after_reload
+        if not token_after_reload:
+            client._last_reload_error = "Cookie expired - redirected to Google login page"
+
+    async def _rotate():
+        return False
+
+    async def _heartbeat():
+        return None
+
+    monkeypatch.setattr(client, "_obtain_session_token", _obtain)
+    monkeypatch.setattr(client, "_rotate_cookies", _rotate)
+    monkeypatch.setattr(client, "_send_heartbeat", _heartbeat)
+    monkeypatch.setattr(client, "_ensure_refresh_task", lambda: None)
+    return client
+
+
+# ---------------------------------------------------------------------------
+# 测试 5（F4）：刷新失败不得把本来健康的 client 永久拉黑
+# ---------------------------------------------------------------------------
+
+def test_failed_reload_does_not_down_a_healthy_client(monkeypatch):
+    """reload_cookies 在任何网络动作前就 _healthy = False，失败返回路径却不恢复：
+    一次失败的刷新（面板误填 cookie / Google 临时抽风）就永久少掉一个健康账号。
+    修复后失败必须"原样不动"：健康标志、会话 token、cookie 全部回滚。"""
+    client = _prepare_client_for_reload(monkeypatch, token_after_reload="")
+
+    result = asyncio.run(client.reload_cookies(psid="bad-psid", psidts="bad-psidts"))
+
+    assert result["success"] is False
+    assert client.is_healthy is True, "刷新失败不得把本来健康的 client 拉黑"
+    # 只回滚 _healthy 是不够的：token/cookie 也得回滚，否则是个"健康但发不出请求"的假账号
+    assert client._session_token == "GOOD-TOKEN"
+    assert client._psid == "good-psid"
+    assert client._psidts == "good-psidts"
+    assert ("__Secure-1PSID", "good-psid") in client._cookie_jar.sets
+
+
+def test_failed_reload_keeps_an_already_unhealthy_client_unhealthy(monkeypatch):
+    """回滚只针对"本来就健康"的 client：本来不健康的（F2 自愈路径）失败后仍是不健康，
+    不能被回滚成假健康。"""
+    client = _prepare_client_for_reload(monkeypatch, token_after_reload="")
+    client._healthy = False
+    client._session_token = ""
+
+    result = asyncio.run(client.reload_cookies())
+
+    assert result["success"] is False
+    assert client.is_healthy is False
+
+
+def test_successful_reload_still_applies_new_cookies(monkeypatch):
+    """零回归：成功的重载必须照常换上新 cookie 与新会话，不能被回滚逻辑误伤。"""
+    client = _prepare_client_for_reload(monkeypatch, token_after_reload="NEW-TOKEN")
+
+    result = asyncio.run(client.reload_cookies(psid="new-psid", psidts="new-psidts"))
+
+    assert result["success"] is True
+    assert client.is_healthy is True
+    assert client._session_token == "NEW-TOKEN"
+    assert client._psid == "new-psid"
+    assert client._psidts == "new-psidts"

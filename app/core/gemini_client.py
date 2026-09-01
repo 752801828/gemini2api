@@ -1590,7 +1590,33 @@ class GeminiWebClient:
         if self._http:
             await self._http.close()
 
+    def _restore_session_state(self, prev: tuple) -> None:
+        """把会话状态回滚到 reload_cookies 调用前（仅当调用前是健康的）。
+
+        只还原 _healthy 是不够的：函数开头会清空 _session_token 并把新 Cookie 写进 jar，
+        一个"健康但没有 SNlM0e token / 拿着别人 Cookie"的 client 会被池照常派活、然后每个
+        请求都失败，3 次就被标 EXPIRED —— 比不还原更糟。所以整组状态一起回滚。
+        """
+        psid, psidts, session_token, was_healthy = prev
+        if not was_healthy:
+            return
+        self._psid = psid
+        self._psidts = psidts
+        self._session_token = session_token
+        self._healthy = True
+        if self._cookie_jar is not None:
+            self._cookie_jar.set("__Secure-1PSID", psid)
+            if psidts:
+                self._cookie_jar.set("__Secure-1PSIDTS", psidts)
+        logger.warning("Cookie reload failed; restored the previous working session")
+
     async def reload_cookies(self, psid: str | None = None, psidts: str | None = None) -> dict:
+        # F4（issue #11）：先快照重载前的会话状态。reload 的语义应是"要么换上新会话、
+        # 要么原样不动"：旧实现在任何网络操作之前就无条件 self._healthy = False，失败返回
+        # 路径却从不恢复，于是一次失败的刷新（面板误填 cookie、Google 临时 5xx、多账号池里
+        # /reload-cookies 拿同一份 cookie 挨个试）就把一个本来健康的 client 永久拉黑。
+        prev_state = (self._psid, self._psidts, self._session_token, self._healthy)
+
         if psid:
             self._psid = psid.strip().strip('"').strip("'").rstrip(";")
         if psidts:
@@ -1600,37 +1626,44 @@ class GeminiWebClient:
         self._healthy = False
         self._last_reload_error = ""
 
-        # Recreate HTTP session to avoid accumulated cookie conflicts
-        if self._http:
-            await self._http.close()
-        self._http = AsyncSession(impersonate=self._current_target, timeout=60)
+        try:
+            # Recreate HTTP session to avoid accumulated cookie conflicts
+            if self._http:
+                await self._http.close()
+            self._http = AsyncSession(impersonate=self._current_target, timeout=60)
 
-        self._cookie_jar.set("__Secure-1PSID", self._psid)
-        if self._psidts:
-            self._cookie_jar.set("__Secure-1PSIDTS", self._psidts)
+            self._cookie_jar.set("__Secure-1PSID", self._psid)
+            if self._psidts:
+                self._cookie_jar.set("__Secure-1PSIDTS", self._psidts)
 
-        await self._obtain_session_token()
-        if self._session_token:
-            self._healthy = True
-            self._ensure_refresh_task()
-            await self._send_heartbeat()  # 拉取账号真实可用模型
-            logger.info("Cookies reloaded successfully")
-            return {"success": True}
-
-        first_error = self._last_reload_error or "SNlM0e token not found"
-
-        rotated = await self._rotate_cookies()
-        if rotated:
             await self._obtain_session_token()
             if self._session_token:
                 self._healthy = True
                 self._ensure_refresh_task()
-                logger.info("Cookies reloaded after rotation")
+                await self._send_heartbeat()  # 拉取账号真实可用模型
+                logger.info("Cookies reloaded successfully")
                 return {"success": True}
 
-        error_msg = self._last_reload_error or first_error
-        logger.error(f"Cookie reload failed: {error_msg}")
-        return {"success": False, "error": error_msg}
+            first_error = self._last_reload_error or "SNlM0e token not found"
+
+            rotated = await self._rotate_cookies()
+            if rotated:
+                await self._obtain_session_token()
+                if self._session_token:
+                    self._healthy = True
+                    self._ensure_refresh_task()
+                    logger.info("Cookies reloaded after rotation")
+                    return {"success": True}
+
+            error_msg = self._last_reload_error or first_error
+            logger.error(f"Cookie reload failed: {error_msg}")
+            self._restore_session_state(prev_state)
+            return {"success": False, "error": error_msg}
+        except Exception:
+            # 已经换上新会话之后才炸的（如 _send_heartbeat 抛错）不回滚，新会话是好的
+            if not self._healthy:
+                self._restore_session_state(prev_state)
+            raise
 
     def _ensure_refresh_task(self):
         if self._refresh_task is None or self._refresh_task.done():
