@@ -35,6 +35,25 @@ def test_panel_assets_are_revalidated(client, path):
     )
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("path", ["/", "/index.html", "/login.html"])
+def test_entry_html_is_revalidated_for_head_too(client, path, method):
+    """入口 HTML 的 HEAD 也必须带 no-cache。
+
+    缺陷：FastAPI 的 APIRoute 只注册显式声明过的方法（starlette 的 Route 会自动补
+    HEAD，APIRoute 不会）。只写 `@app.get("/")` 时 `curl -I http://host/` 会落回
+    StaticFiles 挂载，而 starlette 传进 get_response 的 path 是 "."，不匹配任何后缀，
+    于是拿不到 Cache-Control —— 偏偏 HEAD/条件请求正是缓存新鲜度判定走的那条路。
+    /index.html 和 /login.html 的 HEAD 虽然也落回挂载，但路径以 .html 结尾仍会被补上，
+    所以这里三个入口一起测，防止后面有人给 / 加了方法却把另外两个改坏。
+    """
+    resp = client.request(method, path)
+    assert resp.status_code == 200, f"{method} {path} 拿不到: {resp.status_code}"
+    assert resp.headers.get("cache-control") == "no-cache", (
+        f"{method} {path} 没有 Cache-Control: no-cache，浏览器会按启发式缓存住旧版本"
+    )
+
+
 def test_revalidated_assets_still_serve_etag_for_cheap_304s(client):
     """no-cache 不等于不缓存：必须留着 ETag，回源校验才是 304 空响应而不是全量重传。"""
     resp = client.get("/app/settings.js")

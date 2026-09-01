@@ -463,7 +463,7 @@ async def index_page():
     return HTMLResponse("<h1>Panel not found</h1>", status_code=404)
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root_page():
     """裸地址 ``/`` 是管理员实际打开/收藏的入口，必须和 /index.html 同样每次回源校验。
 
@@ -472,6 +472,12 @@ async def root_page():
     .js/.css/.html/.json 结尾，``RevalidatingStaticFiles`` 因此不会加 Cache-Control，
     浏览器就按启发式新鲜度缓存住这份写着 ``app.js?v=`` 版本串的 HTML，升级后整套前端
     被钉在旧版本上。这正是加 no-cache 想根治的问题，却在最常用的那个 URL 上漏掉了。
+
+    必须显式声明 HEAD：FastAPI 的 APIRoute 只注册声明过的方法（不像 starlette 的
+    Route 会自动补 HEAD），只写 ``@app.get("/")`` 的话 ``curl -I http://host/``
+    仍会落回 StaticFiles 挂载、拿不到 no-cache —— 而缓存判定用的正是这类条件/探测请求。
+    ``/index.html`` 与 ``/login.html`` 没有这个问题：它们的 HEAD 虽然也落回挂载，但
+    路径以 .html 结尾，``RevalidatingStaticFiles`` 会照常补上 Cache-Control。
     """
     return await index_page()
 
