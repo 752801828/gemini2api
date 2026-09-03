@@ -6,9 +6,11 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 
+from app.core.settings_overrides import apply_overrides
+
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.6.32"
+APP_VERSION = "1.6.39"
 
 
 def _generate_api_key() -> str:
@@ -93,6 +95,10 @@ class Settings(BaseSettings):
     # 该时长内新请求优先跳过它，到期自动恢复参与。设 0 关闭冷却（每次都从第一家重试）。
     # 该特性默认生效、无单独开关：仅当某 model 配置了同名多家时才有可见行为变化，单家零回归。
     thirdparty_failover_cooldown: float = 180.0
+    # 完整请求/响应体记录（面板日志详情视图）。**默认关**：请求体含用户完整提示词，
+    # 属隐私 + 体积敏感，只有运维明确需要排障时才开。开启后也只记 body、绝不记任何
+    # 请求头（Authorization 等凭据不进日志），且流式响应只记一个标记、绝不缓冲整个流。
+    log_bodies_enabled: bool = False
 
     @field_validator("gemini_psid")
     @classmethod
@@ -130,6 +136,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# 回放管理面板做过的改动（data/settings-overrides.json），优先级**高于**环境变量。
+# 必须紧跟在 Settings() 之后：account_pool 等模块在 import 期就会读 settings 的值，
+# 放到 lifespan 里回放就晚了。启动日志由 app/main.py 的 lifespan 打印（那时 logging
+# 才配置完），运维排查"改了 .env 为什么不生效"时能一眼看到被覆盖的字段。
+APPLIED_OVERRIDES = apply_overrides(settings)
 
 
 def _persist_api_key():

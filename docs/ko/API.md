@@ -446,6 +446,7 @@ curl -X POST http://localhost:5918/claude/v1/messages \
   ],
   "model": "gemini-2.0-flash",
   "stop_reason": "end_turn",
+  "stop_sequence": null,
   "usage": {
     "input_tokens": 10,
     "output_tokens": 50

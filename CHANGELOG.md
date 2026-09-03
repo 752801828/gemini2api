@@ -4,7 +4,112 @@
 
 ---
 
-## [Unreleased]
+## [1.6.39] - 2026-09-01
+
+### Changed
+
+- ⚠️ **行为变更：面板改过的设置项优先级高于环境变量。** Web 面板「设置」页保存过的项现在会写进
+  `data/settings-overrides.json`（`data/` 是 docker-compose 的持久 bind mount），并在每次启动时回放，
+  **覆盖**同名环境变量。此前 compose 用 `env_file: .env` 注入的是**真实环境变量**，其优先级高于容器内的
+  dotenv 文件，而宿主机 `.env` 根本没挂进容器 —— 面板写的是容器内临时的 `/app/.env`，于是"面板上关掉
+  `LOG_BODIES_ENABLED`、提示保存成功、`docker compose restart` 之后又在记录用户完整提示词"。
+  该行为对全部 20 个面板可编辑字段生效。
+  **升级影响**：若你依赖 `.env` / compose 环境变量来设定这些字段，而该字段曾在面板里被保存过，
+  环境变量将不再生效。启动日志会点名被覆盖的字段
+  （`Applied N panel setting override(s) from data/settings-overrides.json: ...`）；
+  删除 `data/settings-overrides.json` 可把控制权交回环境变量。
+
+### Added
+
+- ⚙️ **`LOG_BODIES_ENABLED` 接入管理面板**：新增「日志」分组，可在面板直接开关请求/响应体记录，无需改配置重启。
+
+### Fixed
+
+- 🧊 **面板静态资源改为每次回源校验**：给面板的 `.js` / `.css` / `.html` / `.json` 加上
+  `Cache-Control: no-cache`（仍保留 ETag，命中即 304）。此前 `index.html` 只给 `app.js` 等挂了 `?v=` 版本串，
+  而 `import './settings.js'` 这类裸模块说明符带不上查询串，升级后可能拿到"新 settings.js + 旧 i18n.js"
+  的半旧状态，界面直接显示 `settings.field.logBodiesEnabled` 这种原始 i18n 键。
+  裸地址 `/`（管理员实际收藏的入口）同样纳入 —— 它此前会落到 StaticFiles 挂载而拿不到该响应头，GET 与 HEAD 都已覆盖。
+- 🔢 **面板里的小数字段不再被静默截断**：`CHAT_CLEANUP_KEEP_HOURS` / `CHAT_CLEANUP_INTERVAL_HOURS`
+  后端声明为 float，但前端一律 `parseInt`，输入 `0.5` 会变成 `0`（`0` 能通过 `>= 0` 校验，于是"保存成功"
+  地存成 0，而运行时被 `max(1.0, x)` 兜成 1 小时）。改为按后端字段类型判定 `parseInt` / `parseFloat`。
+- 🛡️ **拒绝 NaN / ±Infinity 写入设置**：二者都是合法 Python float 且 `inf < 0` 为假，会绕过全部取值域校验
+  被持久化并每次启动回放；`chat_cleanup_interval_hours=inf` 会让清理循环 `asyncio.sleep(inf)` 永不唤醒。
+- 💾 **保存设置改为「全有或全无」**：`data/` 或 `.env` 不可写（自定 compose `user:`、rootless podman uid 映射、
+  只读卷）时接口返回 500，但改动此前已经落在内存和优先级最高的覆盖文件里 —— 管理员看到"保存失败"，
+  **隐私开关其实已经被打开，并且会在下次重启时生效**。现在内存 / `data/settings-overrides.json` / `.env`
+  三层中任何一层失败，都会按写入逆序还原全部已完成的步骤（包括删掉本来不存在、刚被创建出来的覆盖文件），
+  接口才返回 500。同时 500 的错误详情不再把容器内绝对路径和原子写临时文件名回给浏览器。
+
+## [1.6.38] - 2026-09-01
+
+### Fixed
+- 🍪 **修复「同名 Cookie 跨域并存」导致会话获取整体失败（issue #10 追加反馈）**：当 Google 把你重定向到国家域名（`.google.com.hk` / `.com.tw` / `.co.jp` 等）时，`NID` 之类的 Cookie 会同时存在于两个域，而底层 HTTP 库在按名取值时会直接抛 `CookieConflict`。该异常会中断整个 Cookie 更新流程并冒泡到会话令牌获取，日志表现为 `Token extraction failed: Multiple cookies exist with name=NID ...` → 账号被标记为不健康。
+  - 现改为逐个 Cookie 对象读取（天然无同名冲突），同名多域时**确定性**优先采用规范域（`*.google.com`）的值；并给整个 Cookie 更新加了兜底，**Cookie 层的问题不再有机会打断会话获取**。
+  - 这也是 [issue #11](https://github.com/xwteam/gemini2api/issues/11) 里「跑一阵就卡死」的一个真实触发源；且 v1.6.37 的按需自愈**救不了这一条**（自愈同样要走会话获取，会撞同一个异常），因此本版是该场景的必要补充。
+- 🔁 **工具调用 JSON 畸形时自动重新生成一次**：Gemini 网页版没有原生 function calling，工具调用靠提示词模拟，模型偶尔会输出被截断或转义错误的 JSON，此前直接放弃并回复「模型返回的工具调用格式有误」。现在会**自动重新生成一次**再解析（仅一次、仅在声明了工具且判定为畸形时；重试期间流式连接有保活心跳，不会静默断开）。
+  - 明确**不做**「截断 JSON 自动补全」——补全等于拿猜出来的参数去执行工具，风险远大于收益。
+- 🛡️ 日志记录失败不再截断响应：响应体在任何情况下都完整返回给客户端，记录失败只会丢掉日志字段。
+
+### Added
+- 🔍 **可开关的完整请求/响应记录**（`LOG_BODIES_ENABLED`，**默认关**）：开启后可在面板「实时日志」的详情里看到 `/v1/messages` 等接口的完整请求参数与响应内容，便于排查工具调用等问题。
+  - **只记 body、不记任何请求头**（Authorization 等凭据不进日志）；**流式响应只记一个标记、绝不缓冲整个流**；单条上限 4KB。
+  - **body 只存在于内存中，不写入磁盘**：`data/logs.json` 不会包含用户提示词，重启后不留痕，磁盘占用与开关关闭时一致。
+
+## [1.6.37] - 2026-08-30
+
+### Fixed
+- 🩺 **修复账号池永久卡死并误报「All accounts busy」（[issue #11](https://github.com/xwteam/gemini2api/issues/11)）**：当账号的会话失效（Google 轮换 `__Secure-1PSIDTS` 后拿不到 session token）时，账号在池里的状态仍是 `active`（所以面板看着 cookie 正常），但挑选账号时会因「不健康」而跳过它。旧代码判断「是不是只是忙」时**只看状态、不看健康**，于是每个请求都去排队等满 `ACQUIRE_TIMEOUT`（默认 60 秒），最后抛出 `All accounts busy (max_concurrent=8)` → HTTP 529。**这条信息是错的：并发槽位占用其实是 0。**
+  - 现在两处判断口径一致；这种情况会**立即**返回准确的 `503 No healthy account (session expired, cookie refresh required)`，不再让人误以为是并发或 cookie 过期问题。
+  - 并且会**自动尝试自愈**：检测到「活跃但会话失效」的账号时，池会在**不持锁**的前提下调用一次 cookie 重载来恢复会话（单账号也能自己爬起来）。自愈是单飞的（并发请求只触发一次）、失败后有冷却（不会对上游形成请求潮）、且受本次请求的剩余超时预算约束。
+  - 此前这种状态**无法自愈**：池的恢复逻辑只在「完全没有活跃账号」时才跑；客户端自带的自愈代码因为池从不把账号交出去而是死代码。
+- 🛑 **客户端断连不再被算作账号失败**：中途断开（例如点「停止」）此前会走失败计数，**连续 3 次就把账号标记为 EXPIRED**——单账号部署点三次停止就会瘫痪。现在断连只归还并发槽位并唤醒排队者，不累加失败计数；真实的上游失败仍照常计数与过期。
+- 🔄 **cookie 重载失败不再永久拉黑一个本来健康的账号**：重载会在开始前快照会话状态，失败时完整回滚（不再出现「标记为健康但没有 session token」的中间态）。
+
+### Notes
+- 若你的账号池是**健康但真的满载**，行为完全不变：仍然排队等待、仍在有槽位时被唤醒、超时仍返回原来的 `All accounts busy` → 529。
+- 本版**未**改动 PSIDTS 自动轮换的启动时机（目前仅在启动失败或手动重载 cookie 后启动）。让它在正常启动时也常驻会显著增加对 Google 的请求频次与风控面，已有的按需自愈已能解决卡死问题，故此项留作单独评估。
+
+## [1.6.36] - 2026-08-28
+
+### Fixed
+- 🚨 **OpenAI 流式的上游错误不再伪装成正常回答**：此前失败会以 `content: "Error: ..."` + `finish_reason: "stop"` 发出，官方 SDK 视为一次**成功完成**、不抛异常、无法重试。现改为发出标准的 `data: {"error": {...}}` 帧（openai-python 会据此抛 `APIError`），错误类型沿用统一的 `classify_error`。v1.6.35 只修了 Anthropic 侧，本版补齐 OpenAI 侧。
+- 🚦 上游 4xx 的错误类型细化：400/401/403/404 → `invalid_request_error`（此前一律 `api_error`），429 仍为 `rate_limit_error`，5xx 仍为 `api_error`；状态码透传不变。
+- 📐 Anthropic 响应的 `citations` 字段在流式与非流式之间保持一致（此前只有流式帧带）；同时 v1.6.35 去掉的 `id/name/input/source` null 噪音**保持不变**。
+- 🛡️ `build_prompt_from_messages` 对非字符串 `content`（dict/数字等）不再抛 `TypeError`（此前一次模型放宽就会变成 500）；既有字符串/数组输入的输出逐字节不变。
+
+### Notes
+- 生图意图检测的习语排除表**维持 v1.6.35 的内容**（`draw a line/map/card` 等仍视为习语）。本版曾尝试放宽以提高真实画图请求的召回，但评审实测发现：编程语境里 `"draw a line under this discussion"` 这类句子会让**客户端声明的 tools 被静默丢弃**。两种误判代价不对称——误判为图片会让 agent 循环无声损坏，漏判只是当次不走生图分支且用户可改述——故按"宁可保住工具"的方向回退。
+
+## [1.6.35] - 2026-08-28
+
+### Fixed
+- 🛠️ **修复「生图意图误判导致客户端工具被静默丢弃」**（影响全部四个协议）：意图检测此前扫描整个拍平后的 prompt 且无词边界，系统提示词、历史消息、甚至**工具执行结果正文**里出现「image / 绘制」等字样就会命中，进而丢掉客户端声明的 tools、并把请求甩到错误处理更差的分支。现改为**只看最后一轮用户消息**（跳过工具结果/附件块）+ 英文词边界与习语排除（`draw a conclusion` 之类不再误判），真实画图请求（`draw a cat` 等）照常识别。
+- 🚨 **上游错误不再伪装成正常回答**：Anthropic 流式路径此前把上游失败渲染成一段助手文本并以 `stop_reason: end_turn` 收尾，客户端既不抛异常也无法重试，错误文本还会被写进对话历史。现改为发出标准的 `event: error` 帧并终止。
+- 🚦 **错误状态码映射修正**：`HTTPStatusError` 不是 `RuntimeError` 子类，此前在三个路由里都逃逸成裸 500（还会跳过第三方兜底）。现统一由 `classify_error` 映射：上游 429 → 429 `rate_limit_error`、账号池满/忙 → **529 `overloaded_error` + `Retry-After`**（此前是不可重试的 400）、其它 → 500 / 400。
+- 🌊 **补齐两条漏掉的流式保活**：`/v1/responses` 与 native Gemini 的 **buffered 分支**此前没有心跳（v1.6.31 只覆盖了 real-stream 分支）。Codex 恒带 tools 必走前者；后者更是**首字节零输出**，会被网关首字节超时直接掐断。
+- 🔌 **原生 Gemini 路由现在接受官方 SDK 的 camelCase 报文**：此前 `systemInstruction` / `generationConfig` / `inlineData` 会被静默丢弃（系统提示词与附件直接消失），`functionCall` / `functionResponse` 也不进 prompt。snake_case 写法保持兼容。
+- 🧰 **OpenAI 的 `tool_calls` 不再在拍平时被整体丢弃**，`content: null` 也不再渲染成字面量 `None`；**第三方 Anthropic 转发**补上请求侧格式转换（`role:"tool"` → `tool_result`、`tool_calls` → `tool_use`），工具循环不再第二轮硬失败。
+- 📐 **Anthropic 响应结构对齐规范**：不再发送非标准的 assistant `image` 块（官方 SDK 无此类型，会把图片吞掉），生成的图片改为以 Markdown 形式并入文本；内容块不再携带 `id/name/input/source` 等 null 噪音；`usage` 补上 `cache_creation_input_tokens` / `cache_read_input_tokens` / `service_tier`；流式帧补上 `stop_sequence` / `stop_reason` / `citations`；空回答不再产生空内容块或零长度增量。
+
+## [1.6.34] - 2026-08-28
+
+### Fixed
+- 🧹 **Anthropic 协议细节与健壮性打磨**（v1.6.33 Claude Code 修复的收尾）：
+  - 响应补上 Anthropic 规范的 `stop_sequence` 字段（未命中停止序列时为 `null`），并同步补齐 en / ko / zh-TW 三份 API 文档（此前只有 zh-CN / ja 写了）。
+  - 工具调用块的 `name` 显式为 `null` 时不再渲染出 Python 字面量 `None`。
+  - 客户端断开时的保活守卫补上异常取回，避免极端时序下 asyncio 打印 "Task exception was never retrieved"。
+- 🧪 测试加固：补上工具渲染格式的精确断言、`tool_result` 内容各种退化形态的覆盖、以及 OpenAI buffered 流式断连取消（主路径 + 重试路径）的测试；修正一条恒真的空转断言与一处被不必要放宽的源码守卫。
+
+## [1.6.33] - 2026-08-28
+
+### Fixed
+- 🔌 **修复 Claude Code 无法接入（issue #10）**，共三处：
+  - `/v1/messages` 的 `system` 现在同时接受**字符串**与 Anthropic 合法的**文本块数组**形态（Claude Code 发的是数组、块上带 `cache_control`），不再返回 422。
+  - 会话中的 `tool_use` / `tool_result` 内容块不再被丢弃：此前工具调用与工具结果都拿不到，导致 agent 工具循环从第二轮起就是空的。
+  - Anthropic 流式改为标准的 `event:` + `data:` 两行制（此前只发 `data:`，按 `event` 字段分发的官方客户端会解析不到事件）。
+- 🌊 Claude 的 buffered 流式路径（带工具/附件时走这条，Claude Code 恒命中）补上 SSE 保活心跳，长响应不再被网关空闲超时掐断；三处保活循环在客户端断开时会取消上游任务并及时归还账号槽位。
+- 🛡️ 消息内容块中 `text` 字段为非字符串（如 `null`）时不再 500，改为优雅跳过（四协议共用路径）。
 
 ### Fixed
 - 管理页面组件遇到瞬时 HTTP 5xx 时自动绕缓存重试一次，避免单个静态片段短暂失败导致整页白屏。

@@ -18,7 +18,8 @@ function getGroupTitle(groupKey) {
     health_check: 'settings.group.healthCheck',
     account_management: 'settings.group.accounts',
     usage_stats: 'settings.group.stats',
-    chat_cleanup: 'settings.group.chatCleanup'
+    chat_cleanup: 'settings.group.chatCleanup',
+    logging: 'settings.group.logging'
   };
   return t(map[groupKey] || groupKey);
 }
@@ -29,7 +30,8 @@ const GROUP_ICONS = {
   health_check: 'fa-heartbeat',
   account_management: 'fa-users-cog',
   usage_stats: 'fa-chart-line',
-  chat_cleanup: 'fa-broom'
+  chat_cleanup: 'fa-broom',
+  logging: 'fa-file-alt'
 };
 
 function getFieldLabel(key) {
@@ -45,20 +47,47 @@ function getFieldLabel(key) {
     rotation_strategy: 'settings.field.rotationStrategy',
     max_concurrent_per_account: 'settings.field.maxConcurrent',
     usage_stats_enabled: 'settings.field.usageStatsEnabled',
-    usage_stats_interval: '快照间隔(秒)',
-    usage_stats_retention_days: '数据保留天数',
+    usage_stats_interval: 'settings.field.usageStatsInterval',
+    usage_stats_retention_days: 'settings.field.usageStatsRetention',
+    version_sync_enabled: 'settings.field.versionSyncEnabled',
+    extended_thinking_enabled: 'settings.field.extendedThinkingEnabled',
     chat_cleanup_enabled: 'settings.field.chatCleanupEnabled',
     chat_cleanup_keep_hours: 'settings.field.chatCleanupKeepHours',
     chat_cleanup_interval_hours: 'settings.field.chatCleanupInterval',
-    chat_cleanup_skip_pinned: 'settings.field.chatCleanupSkipPinned'
+    chat_cleanup_skip_pinned: 'settings.field.chatCleanupSkipPinned',
+    log_bodies_enabled: 'settings.field.logBodiesEnabled'
   };
   return map[key] ? (map[key].startsWith('settings.') ? t(map[key]) : map[key]) : key;
+}
+
+// 字段级补充说明（可选）。只有出现在这里的字段才会多渲染一行提示，
+// 未登记的字段渲染结果与之前逐字节一致。
+const FIELD_HINTS = {
+  log_bodies_enabled: 'settings.hint.logBodies'
+};
+
+function getFieldHint(key) {
+  return FIELD_HINTS[key] ? t(FIELD_HINTS[key]) : '';
 }
 
 const ROTATION_OPTIONS = [
   { value: 'round-robin', labelKey: 'settings.strategy.roundRobin' },
   { value: 'failover', labelKey: 'settings.strategy.failover' }
 ];
+
+// 后端 app/core/settings_overrides.py 的 FIELD_TYPES 里声明为 float 的字段。
+// 必须按字段名判定，不能按"当前值是不是整数"猜：JSON 没有 int/float 之分，后端的
+// 24.0 到了 JS 就是 24，Number.isInteger(24) 为真 —— 默认部署下永远猜成整数字段，
+// step 永远是 1，0.5 依旧被 parseInt 截断成 0。tests/unit/test_settings_float_fields.py
+// 有守卫断言本集合与后端 FIELD_TYPES 完全一致，后端加了新 float 字段这里不跟就会红。
+const FLOAT_FIELDS = new Set([
+  'chat_cleanup_keep_hours',
+  'chat_cleanup_interval_hours'
+]);
+
+function isFloatField(key) {
+  return FLOAT_FIELDS.has(String(key).split('.').pop());
+}
 
 function createFieldInput(key, value) {
   const type = typeof value;
@@ -82,7 +111,11 @@ function createFieldInput(key, value) {
   }
 
   if (type === 'number') {
-    return `<input type="number" class="form-control" data-key="${key}" value="${value}">`;
+    // step 既是给浏览器的输入约束，也是 collectFormValues 判断该用 parseInt 还是
+    // parseFloat 的依据：后端把 chat_cleanup_* 声明为 float，允许 0.5 这样的小时数，
+    // 一律 parseInt 会把它静默截断成 0。整数字段仍是 step=1，行为与之前完全一致。
+    const step = isFloatField(key) ? 'any' : '1';
+    return `<input type="number" class="form-control" data-key="${key}" step="${step}" value="${value}">`;
   }
 
   return `<input type="text" class="form-control" data-key="${key}" value="${value}">`;
@@ -106,7 +139,9 @@ function renderSettings(settings) {
       const label = getFieldLabel(key);
       const fullKey = groupKey + '.' + key;
       const input = createFieldInput(fullKey, value);
-      html += '<div class="setting-field"><label>' + label + '</label>' + input + '</div>';
+      const hint = getFieldHint(key);
+      html += '<div class="setting-field"><label>' + label + '</label>' + input +
+        (hint ? '<small class="form-hint">' + escapeHtml(hint) + '</small>' : '') + '</div>';
     }
 
     html += '</div></div>';
@@ -251,7 +286,11 @@ function collectFormValues() {
     if (input.type === 'checkbox') {
       value = input.checked;
     } else if (input.type === 'number') {
-      value = parseInt(input.value, 10);
+      // 后端声明为 float 的字段必须用 parseFloat，否则 0.5 会被截断成 0：0 能通过
+      // ">= 0" 的取值域校验，于是静默保存成 0 并落进 settings-overrides.json（优先级
+      // 高于环境变量），面板显示 0 而运行时被 max(1.0, x) 兜成 1 小时 —— 一个设置项
+      // 三个值，还不报错。判定同样按字段名走，不看 input.step（DOM 可能被改）。
+      value = isFloatField(key) ? parseFloat(input.value) : parseInt(input.value, 10);
     } else {
       value = input.value;
     }

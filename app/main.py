@@ -5,14 +5,15 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.config import settings, APP_VERSION, mask_secret
+from app.config import settings, APP_VERSION, mask_secret, APPLIED_OVERRIDES
+from app.core.settings_overrides import OVERRIDES_PATH
 from app.core.account_pool import account_pool
 from app.core.auth import verify_api_key, verify_admin_key
 from app.core.limiter import limiter
@@ -59,10 +60,26 @@ logging.getLogger("app").setLevel(log_level)
 logger = logging.getLogger(__name__)
 
 
+async def _flush_log_store(log_store) -> None:
+    """LogStore.flush() 是同步的全量 json.dumps + write_text，即使 issue #10 followup
+    F1a 把 body 从落盘内容里剥掉了，2000 条记录的全量重写仍有实打实的 CPU/IO 开销。
+    log_flush_loop 每 10 秒调一次、跑在事件循环上，同步调用会让整个代理卡顿一截——
+    丢进线程池，不阻塞事件循环（issue #10 followup F1b）。"""
+    await asyncio.to_thread(log_store.flush)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     logger.info(f"API Key: {mask_secret(settings.api_key)}")
+    if APPLIED_OVERRIDES:
+        # 面板改过的值优先级高于环境变量，运维改了 .env 却"不生效"时这行是唯一线索。
+        logger.info(
+            "Applied %d panel setting override(s) from %s: %s",
+            len(APPLIED_OVERRIDES),
+            OVERRIDES_PATH,
+            ", ".join(f"{k}={v}" for k, v in sorted(APPLIED_OVERRIDES.items())),
+        )
     app.state.log_store = LogStore()
     app.state.patrol = PatrolService(account_pool, log_store=app.state.log_store)
     account_pool.set_browser_failure_notifier(app.state.patrol.notify_browser_failure)
@@ -78,7 +95,7 @@ async def lifespan(app: FastAPI):
     async def log_flush_loop():
         while True:
             await asyncio.sleep(10)
-            app.state.log_store.flush()
+            await _flush_log_store(app.state.log_store)
 
     log_flush_task = asyncio.create_task(log_flush_loop())
 
@@ -219,6 +236,108 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 SKIP_LOG_PREFIXES = ("/static/", "/favicon.ico", "/admin/logs")
 
+import re as _re
+
+# VULN-008：日志脱敏。避免 ?token=sk-xxx / 路径中出现的 key 进入结构化日志。
+_TOKEN_SCRUB_RE = _re.compile(r"(token=)[^&\s]+", _re.IGNORECASE)
+_SK_SCRUB_RE = _re.compile(r"sk-[A-Za-z0-9]{4,}")
+
+
+def _scrub_sensitive(text: str) -> str:
+    if not text:
+        return text
+    scrubbed = _TOKEN_SCRUB_RE.sub(r"\1****", text)
+    return _SK_SCRUB_RE.sub("sk-****", scrubbed)
+
+
+# ---------------------------------------------------------------------------
+# 完整请求/响应体记录（settings.log_bodies_enabled，默认关）
+# ---------------------------------------------------------------------------
+# 硬约束（勿改）：
+#   1. 开关关闭时这段代码一行都不执行，中间件行为与开关引入前逐字节一致。
+#   2. **绝不缓冲流式响应体** —— 只记一个短标记。缓冲 SSE/NDJSON 等于把流式变非流式，
+#      客户端会一直等到上游结束才收到第一个字节，是比"日志不全"严重得多的事故。
+#   3. 只记 body，**不记任何请求头** —— Authorization / Cookie 等凭据永不进日志。
+LOG_BODY_MAX_BYTES = 4 * 1024           # 入库上限（原 32KB，issue #10 followup F1c 收窄），超出截断并标注
+LOG_BODY_CAPTURE_LIMIT = 1024 * 1024    # 超过这个大小干脆不读（生图 base64 等）
+_STREAMING_NOT_CAPTURED = {"_note": "streaming response not captured"}
+# gemini 的流式端点用 media_type="application/json"（NDJSON 流），content-type 认不出来，
+# 只能靠路径识别；其余流式端点都是 text/event-stream 或带 X-Accel-Buffering: no。
+_STREAMING_PATH_HINTS = (":streamgeneratecontent",)
+
+
+def _body_for_log(raw) -> dict | None:
+    """把一段响应/请求字节体转成可入日志的 dict；超限截断并标注。"""
+    if not raw:
+        return None
+    raw = bytes(raw)
+    if len(raw) > LOG_BODY_MAX_BYTES:
+        return {
+            "_truncated": True,
+            "_size": len(raw),
+            "_preview": raw[:LOG_BODY_MAX_BYTES].decode("utf-8", "replace"),
+        }
+    import json as _json
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        return {"_raw": raw.decode("utf-8", "replace")}
+    return parsed if isinstance(parsed, dict) else {"_value": parsed}
+
+
+def _looks_like_streaming(response, path: str, stream_flag) -> bool:
+    ctype = (response.headers.get("content-type") or "").lower()
+    if "text/event-stream" in ctype or "ndjson" in ctype:
+        return True
+    if (response.headers.get("x-accel-buffering") or "").strip().lower() == "no":
+        return True
+    if stream_flag is True:
+        return True
+    low = path.lower()
+    return any(hint in low for hint in _STREAMING_PATH_HINTS)
+
+
+async def _capture_response_body(response):
+    """读出**非流式**响应体并重建响应，返回 (response, body_dict)。
+
+    只在已判定为非流式时调用。BaseHTTPMiddleware 的 call_next 一律返回带
+    body_iterator 的包装响应（连 JSONResponse 也是），所以必须读迭代器再重建。
+    重建时直接搬 raw_headers，保留重复头（CORS 的 vary 等）与 content-length 原样。
+
+    异常安全（issue #10 followup F3）：body_iterator 一旦被排空就回不去了——排空之后
+    重建响应必须**无条件**发生，绝不能让"把 body 序列化成日志用 dict"这一步的任何异常
+    捎带把重建也跳过，否则客户端会拿到一个 Content-Length 仍在、却零字节的 200。
+    所以 `_body_for_log` 单独包一层 try/except，失败只丢一条 log 字段，绝不影响 response。
+    """
+    body_iterator = getattr(response, "body_iterator", None)
+    if body_iterator is None:
+        try:
+            body_dict = _body_for_log(getattr(response, "body", None))
+        except Exception as e:
+            logger.warning(f"[log_bodies] 记录响应体失败，已跳过（响应不受影响）: {e}")
+            body_dict = None
+        return response, body_dict
+    try:
+        content_length = int(response.headers.get("content-length") or 0)
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length > LOG_BODY_CAPTURE_LIMIT:
+        return response, {"_note": "response too large to capture", "_size": content_length}
+
+    chunks = [chunk async for chunk in body_iterator]
+    raw = b"".join(bytes(c) for c in chunks)
+    # 重建必须先于任何可能失败的步骤完成——见上面 docstring。
+    rebuilt = Response(content=raw, status_code=response.status_code)
+    rebuilt.raw_headers = list(response.raw_headers)
+    rebuilt.background = response.background
+    try:
+        body_dict = _body_for_log(raw)
+    except Exception as e:
+        logger.warning(f"[log_bodies] 记录响应体失败，已跳过（响应不受影响）: {e}")
+        body_dict = None
+    return rebuilt, body_dict
+
+
 @app.middleware("http")
 async def log_capture_middleware(request: Request, call_next):
     path = request.url.path
@@ -272,6 +391,25 @@ async def log_capture_middleware(request: Request, call_next):
     if status >= 400:
         error_msg = f"HTTP {status}"
 
+    # 上游完整正文模式启用时，非流式响应在这里安全捕获；关闭时继续保留本项目原有的
+    # 脱敏请求/响应预览，避免升级后实时日志重新变成 null。
+    response_body = None
+    response_captured_inline = False
+    if settings.log_bodies_enabled and is_api:
+        try:
+            request_body = limit_log_payload(
+                _body_for_log(getattr(request.state, "_body_cache", None))
+            )
+            if _looks_like_streaming(response, path, stream):
+                response_body = dict(_STREAMING_NOT_CAPTURED)
+            else:
+                response, response_body = await _capture_response_body(response)
+                response_body = limit_log_payload(response_body) if response_body is not None else None
+            response_captured_inline = True
+        except Exception as e:
+            # body 记录是排障辅助功能，任何异常都不得影响这次请求本身
+            logger.warning(f"[log_bodies] 记录请求/响应体失败，已跳过: {e}")
+
     log_store = request.app.state.log_store
     record = create_log_record(
         method=method,
@@ -283,15 +421,16 @@ async def log_capture_middleware(request: Request, call_next):
         stream=stream,
         error=error_msg,
         request_body=request_body,
+        response_body=response_body,
     )
     log_store.add(record)
 
     content_type = response.headers.get("content-type", "")
-    if is_api and hasattr(response, "body_iterator"):
+    if is_api and not response_captured_inline and hasattr(response, "body_iterator"):
         response.body_iterator = capture_response_iterator(
             response.body_iterator, log_store, record.id, content_type, stream
         )
-    elif is_api:
+    elif is_api and not response_captured_inline:
         raw_body = getattr(response, "body", b"") or b""
         updater = getattr(log_store, "update_response", None)
         if updater:
@@ -351,11 +490,16 @@ async def serve_generated_image(image_id: str):
     return FileResponse(path, media_type=image_store.content_type_for(image_id))
 
 
+# 这两个入口 HTML 必须每次回源校验：里面写着 base.css?v= / app.js?v= 这些版本串，
+# 缓存住旧 HTML 就等于把整套前端资源都钉在旧版本上（no-cache 仍走 ETag，命中即 304）。
+_HTML_NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/login.html")
 async def login_page():
     login_file = STATIC_DIR / "login.html"
     if login_file.exists():
-        return FileResponse(login_file, media_type="text/html")
+        return FileResponse(login_file, media_type="text/html", headers=_HTML_NO_CACHE)
     return HTMLResponse("<h1>Login page not found</h1>", status_code=404)
 
 
@@ -363,14 +507,56 @@ async def login_page():
 async def index_page():
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file, media_type="text/html", headers={"Cache-Control": "no-store"})
+        return FileResponse(index_file, media_type="text/html", headers=_HTML_NO_CACHE)
     return HTMLResponse("<h1>Panel not found</h1>", status_code=404)
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root_page():
+    """裸地址 ``/`` 是管理员实际打开/收藏的入口，必须和 /index.html 同样每次回源校验。
+
+    没有这条路由时 ``/`` 会落到末尾的 StaticFiles 挂载（html=True 会替我们返回
+    index.html），但 starlette 传给 ``get_response`` 的 path 是 ``"."`` —— 不以
+    .js/.css/.html/.json 结尾，``RevalidatingStaticFiles`` 因此不会加 Cache-Control，
+    浏览器就按启发式新鲜度缓存住这份写着 ``app.js?v=`` 版本串的 HTML，升级后整套前端
+    被钉在旧版本上。这正是加 no-cache 想根治的问题，却在最常用的那个 URL 上漏掉了。
+
+    必须显式声明 HEAD：FastAPI 的 APIRoute 只注册声明过的方法（不像 starlette 的
+    Route 会自动补 HEAD），只写 ``@app.get("/")`` 的话 ``curl -I http://host/``
+    仍会落回 StaticFiles 挂载、拿不到 no-cache —— 而缓存判定用的正是这类条件/探测请求。
+    ``/index.html`` 与 ``/login.html`` 没有这个问题：它们的 HEAD 虽然也落回挂载，但
+    路径以 .html 结尾，``RevalidatingStaticFiles`` 会照常补上 Cache-Control。
+    """
+    return await index_page()
 
 
 API_DIR = Path(__file__).parent.parent / "api"
 
+
+class RevalidatingStaticFiles(StaticFiles):
+    """给面板的 JS/CSS/HTML 加 ``Cache-Control: no-cache``。
+
+    StaticFiles 默认不发 Cache-Control，浏览器就按启发式新鲜度自己缓存。index.html 只给
+    base.css/mobile.css/app.js 挂了 ?v= 版本串，而 app.js 里 `import './settings.js'`
+    这类裸模块说明符带不上查询串 —— 升级后管理员可能拿到旧的 settings.js/i18n.js，
+    甚至出现"只更新了一半"（新 settings.js + 旧 i18n.js → 界面直接显示
+    settings.field.logBodiesEnabled 这种原始 i18n 键）。
+
+    no-cache 不是不缓存，是"每次必须回源校验"；StaticFiles 本来就发 ETag/Last-Modified，
+    命中即 304 空响应，代价极小，却根治了升级后取到陈旧模块的问题。
+    """
+
+    _REVALIDATE_SUFFIXES = (".js", ".css", ".html", ".json")
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.endswith(self._REVALIDATE_SUFFIXES):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app.mount("/api-assets", StaticFiles(directory=str(API_DIR)), name="api-assets")
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+app.mount("/", RevalidatingStaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
 if __name__ == "__main__":

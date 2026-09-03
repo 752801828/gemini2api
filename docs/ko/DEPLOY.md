@@ -197,6 +197,25 @@ AI 응답 텍스트가 보이면 배포 성공입니다. 401 반환 시 API 키 
 
 ## 문제 해결
 
+### .env를 수정하고 재시작해도 반영되지 않음
+
+**증상:** `.env`의 설정 항목을 변경하고 `docker compose restart`해도 값이 바뀌지 않음.
+
+**원인:** 웹 패널의 "설정" 페이지에서 저장한 항목은
+`data/settings-overrides.json`에 기록되어 시작할 때마다 다시 적용되며
+**환경 변수보다 우선**합니다. 이는 의도된 동작입니다. 패널에서
+`LOG_BODIES_ENABLED`를 끈 뒤 재시작으로 다시 켜져서는 안 되기 때문입니다.
+
+**진단:** 시작 로그에서 다음 줄을 찾으면 덮어써진 항목을 알 수 있습니다:
+
+```bash
+docker compose logs | grep "panel setting override"
+# [INFO] app.main: Applied 2 panel setting override(s) from data/settings-overrides.json: log_bodies_enabled=False, max_retries=7
+```
+
+**해결:** 패널에서 값을 변경하거나(권장), `data/settings-overrides.json`을 삭제해
+`.env` / 환경 변수에 제어권을 넘긴 뒤 재시작하세요.
+
 ### Cookie 약 2시간 후 만료
 
 **증상**: 요청 시 `SNlM0e not found` 또는 `401 Unauthorized` 오류

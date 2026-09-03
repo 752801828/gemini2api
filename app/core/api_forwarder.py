@@ -280,6 +280,78 @@ async def open_stream(
     return await forward_to_provider(entry, messages, req), None
 
 
+def _openai_tool_calls_to_anthropic_blocks(content, tool_calls: list) -> list[dict]:
+    """assistant.tool_calls（OpenAI 形态）-> Anthropic tool_use content block 列表。
+    是 _convert_anthropic_to_openai（本文件下方 ~397 行）里 tool_use -> tool_calls 那段的
+    精确逆操作：OpenAI 的 function.arguments 是 JSON 字符串，这里 json.loads 还原成
+    Anthropic 要的 input 对象；解析失败不抛异常击穿整个转发请求，降级保留原始值。"""
+    blocks = []
+    if content:
+        blocks.append({"type": "text", "text": content})
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        args_raw = fn.get("arguments")
+        if isinstance(args_raw, str):
+            try:
+                args = json.loads(args_raw)
+            except (TypeError, ValueError):
+                args = {"_raw": args_raw}
+        else:
+            args = args_raw if isinstance(args_raw, dict) else {}
+        blocks.append({
+            "type": "tool_use",
+            "id": call.get("id", ""),
+            "name": fn.get("name", ""),
+            "input": args,
+        })
+    return blocks
+
+
+def _openai_messages_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]:
+    """把 OpenAI 形态的消息转换成真实 Anthropic API 能接受的形态。
+
+    第三方 Anthropic 转发此前把 msg["role"]/msg["content"] 原样转发给上游，但 role:"tool"
+    和 content:null 都会被真实 Anthropic API 拒收（4xx）——工具循环发出第二轮请求
+    （带 role:"tool" 的工具结果消息）时必然硬失败。转换规则：
+      - role == "tool"        -> role:"user" + [{"type":"tool_result", "tool_use_id":..., "content":...}]
+      - assistant.tool_calls  -> content blocks（文本块 + 每个调用一个 tool_use 块）
+      - content is None       -> ""（Anthropic 不接受 null content）
+    """
+    system_message = None
+    anthropic_messages = []
+
+    for msg in messages:
+        role = msg.get("role")
+        if role == "system":
+            system_message = msg.get("content")
+            continue
+        if role == "tool":
+            anthropic_messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id"),
+                    "content": msg.get("content") or "",
+                }],
+            })
+            continue
+        tool_calls = msg.get("tool_calls")
+        if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+            anthropic_messages.append({
+                "role": "assistant",
+                "content": _openai_tool_calls_to_anthropic_blocks(msg.get("content"), tool_calls),
+            })
+            continue
+        anthropic_messages.append({
+            "role": role,
+            "content": msg.get("content") or "",
+        })
+
+    return system_message, anthropic_messages
+
+
 async def _forward_anthropic(
     entry: ApiKeyEntry,
     messages: list[dict],
@@ -298,19 +370,9 @@ async def _forward_anthropic(
         "Content-Type": "application/json",
     }
 
-    # Extract system message if present
-    system_message = None
-    anthropic_messages = []
-
-    for msg in messages:
-        if msg["role"] == "system":
-            system_message = msg["content"]
-        else:
-            # Anthropic requires alternating user/assistant messages
-            anthropic_messages.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
+    # 把 OpenAI 形态的 messages（role:"tool" / assistant.tool_calls / content:null）
+    # 转换成 Anthropic 上游能接受的形态——见 _openai_messages_to_anthropic 顶部注释。
+    system_message, anthropic_messages = _openai_messages_to_anthropic(messages)
 
     payload = {
         "model": entry.model,

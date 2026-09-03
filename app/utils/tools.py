@@ -4,6 +4,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 畸形工具调用 JSON 的降级提示。既是发给客户端的文案，也是 is_malformed_tool_result
+# 的判定依据——两者共用同一个常量，避免改文案时判定悄悄失效。
+MALFORMED_TOOL_NOTICE = "（模型返回的工具调用格式有误，已忽略。请重试或换用 gemini-flash。）"
+
 
 # 明确的图像生成意图关键词。收窄到「确实在要图」的表达，避免误判
 # （如"生成一份报告""create a plan"不该触发生图）。
@@ -26,22 +30,104 @@ _IMAGE_INTENT_PATTERNS = (
 )
 
 
+# "draw a" / "draw an" 自身不含图像名词，是纯前缀片段。英文里它绝大多数时候就是在
+# 要图（"draw a cat" / "draw an elephant"），只有一个收窄的习语宾语闭集是例外
+# （"draw a conclusion/distinction/parallel/line/..."）。用负向前瞻排除这个闭集，
+# 而不是反过来要求后随图像名词——后者会把 "draw a cat" 这类最常见的英文生图请求
+# 也一并排除在外，导致 has_tools 常年为 True、四个 router 全部注入工具 prompt、
+# 压制 Gemini 的生图（见 app/routers/openai.py:305 的注释），是本文件曾经出现过的
+# 一次过度修正，务必不要重蹈。
+#
+# R4 曾经把 map/maps、card/cards、line/lines 移出这张闭集，理由是它们既是习语宾语
+# 也是真实可画之物（"draw a map of the kingdom"）。该改动已被线上复核实测推翻并
+# 回退——不是审美偏好，是两个判错方向的代价不对称：
+#
+# is_image_generation_intent 只在「客户端声明了 tools」时才有效果——它决定的是要不
+# 要压制/丢弃这些 tools、改走工具模拟。于是：
+#   - 假阳性（习语被误判成生图意图，如 "draw a line under this discussion" 这类
+#     纯习语用法）→ 客户端的 tools 被静默丢弃，agent 的工具循环无声断掉，没有报错、
+#     没有日志，调用方根本不知道发生了什么。SEVERE。
+#   - 假阴性（真实生图请求未被识别成生图意图）→ 工具 prompt 被注入，这一次的生图
+#     可能被压制成文本回复。MILD——用户看得见，换个说法即可重试。
+# 因此安全的方向永远是排除更多习语而非更少，哪怕代价是漏掉"draw a map of the
+# kingdom"这类真·生图请求的召回率。map/card/line 三组必须留在闭集里，请勿再次
+# 移除。
+_DRAW_ARTICLE_IDIOM_OBJECTS = (
+    "conclusion", "conclusions", "distinction", "distinctions", "parallel", "parallels",
+    "line", "lines", "inference", "inferences", "outline", "outlines", "comparison",
+    "comparisons", "analogy", "analogies", "attention", "blank", "blanks", "breath",
+    "card", "cards", "salary", "crowd", "crowds", "map", "maps",
+)
+_DRAW_ARTICLE_RE = (
+    r"\bdraw an?\b(?!\s+(?:" + "|".join(_DRAW_ARTICLE_IDIOM_OBJECTS) + r")\b)"
+)
+
+
+def _build_ascii_intent_re() -> re.Pattern[str]:
+    """把英文模式编译成带 \\b 词边界的正则。
+    裸子串匹配会在词内命中（"a photo of" 命中 "data photo of-mode"），\\b 挡掉这类噪声。
+
+    "draw a" / "draw an" 单独处理，见 _DRAW_ARTICLE_RE 上方注释。
+
+    alts 为空（理论上不会发生，除非关键词表被清空）时绝不能 re.compile("")——
+    那会匹配任意字符串，等于把 has_tools 判定又打回「全体误判」的老路。
+    """
+    strong = []
+    has_draw_article = False
+    for p in _IMAGE_INTENT_PATTERNS:
+        if not p.isascii():
+            continue
+        if p in ("draw a", "draw an"):
+            has_draw_article = True
+            continue
+        strong.append(re.escape(p))
+
+    alts = []
+    if strong:
+        alts.append(rf"\b(?:{'|'.join(strong)})\b")
+    if has_draw_article:
+        alts.append(_DRAW_ARTICLE_RE)
+
+    if not alts:
+        return re.compile(r"(?!)")  # 永不匹配，安全侧兜底
+    return re.compile("|".join(alts))
+
+
+_ASCII_INTENT_RE = _build_ascii_intent_re()
+# 中文没有词边界概念，\b 对 CJK 无意义，保持原样的子串匹配。
+_CJK_INTENT_PATTERNS = tuple(p for p in _IMAGE_INTENT_PATTERNS if not p.isascii())
+
+
 def is_image_generation_intent(text: str) -> bool:
     """判断用户消息是否是明确的「生成图片」意图。
     用于：即使请求带 tools（agent 场景），只要是生图意图就跳过工具模拟、直接走生图。
     收窄匹配避免误判：单独的"生成/create/generate"不算，必须是明确的画图/生成图片表达。
+
+    注意：调用方必须只传「最后一轮用户消息」的文本，不能传整段拍平的 prompt —— 后者
+    含 system 提示词、历史轮次与 tool_result 正文，里面的图片字样并不是用户在要图，
+    误判会静默丢掉客户端声明的 tools（见 app/utils/prompt.py:last_user_text）。
     """
     if not text:
         return False
     low = text.lower()
-    return any(p in low for p in _IMAGE_INTENT_PATTERNS)
+    if any(p in low for p in _CJK_INTENT_PATTERNS):
+        return True
+    return bool(_ASCII_INTENT_RE.search(low))
 
 
 # 宽松版：图像名词 + 产出动词的组合。用于「流式分流」兜底——
 # 误判只是让该请求走非流式 buffered（慢一点点），代价极小；
 # 但能兜住关键词没精确覆盖的生图表达，避免漏网走真流式导致图在文字后。
 _IMG_NOUNS = ("图", "图片", "图像", "海报", "插画", "照片", "壁纸", "logo", "头像", "封面",
-              "image", "picture", "poster", "photo", "drawing", "illustration", "wallpaper", "avatar")
+              "image", "picture", "poster", "photo", "drawing", "illustration", "wallpaper", "avatar",
+              # 严格判断（is_image_generation_intent）现在用负向前瞻排除 "draw a
+              # conclusion/distinction/outline/..." 这一小撮习语闭集（见 _DRAW_ARTICLE_RE），
+              # 对这些句子仍返回 False。宽松判断绝不能跟着收窄——它决定生图的加长 POST 超时
+              # （180s vs 60s）与 buffered 分流，误判代价极小（多走 buffered），漏判代价是
+              # 真·生图超时。补进这两个短语后，凡含 "draw a/an" 的文本（包括这些习语句）
+              # has_noun+has_verb 仍必然为 True，宽松判断的结果与 efbdd1d 改动前逐例一致
+              # （证据见 tests/unit/test_tools.py::TestMaybeImageGenerationIntentParity）。
+              "draw a", "draw an")
 _IMG_VERBS = ("画", "生成", "绘", "做", "设计", "出", "整", "来", "搞", "弄", "制作", "帮我", "给我",
               "想要", "要", "想", "需要", "求", "来一", "来个", "来张",
               "draw", "generate", "create", "make", "design", "render", "want", "need")
@@ -225,11 +311,52 @@ def parse_tool_response(text: str) -> dict:
                        or ('"name"' in text and '"arguments"' in text))
     if looks_like_tool:
         logger.warning(f"工具调用 JSON 解析失败，畸形片段不透传: {text[:120]!r}")
-        return {"type": "text",
-                "content": "（模型返回的工具调用格式有误，已忽略。请重试或换用 gemini-flash。）"}
+        return {"type": "text", "content": MALFORMED_TOOL_NOTICE}
 
     # 普通文本（非工具意图）原样返回
     return {"type": "text", "content": text}
+
+
+def is_malformed_tool_result(parsed) -> bool:
+    """判断 parse_tool_response 的结果是不是「畸形工具 JSON」的降级提示。"""
+    return (
+        isinstance(parsed, dict)
+        and parsed.get("type") == "text"
+        and parsed.get("content") == MALFORMED_TOOL_NOTICE
+    )
+
+
+async def parse_tool_response_with_retry(text: str, regenerate) -> dict:
+    """解析工具调用文本；判定为畸形时用 ``regenerate()`` 重新取一次文本，再解析一次。
+
+    **明确不做「截断 JSON 自动修补」**：补全一个被截断的工具调用，等于拿猜出来的参数
+    去执行工具（issue #10 里那条被截断的片段就是个超长 alpha 表达式），风险远大于收益。
+    宁可这一轮失败让客户端重试，也绝不猜。
+
+    约束：
+    - **最多重试一次**，不递归；首次即合法时一次都不重试（不平白加倍延迟）。
+    - ``regenerate()`` 抛异常 / 返回空 / 二次仍畸形 → 一律返回**首次**结果。
+      重试绝不能把一次"降级成功"变成 500。
+    """
+    parsed = parse_tool_response(text)
+    if regenerate is None or not is_malformed_tool_result(parsed):
+        return parsed
+
+    logger.warning("工具调用 JSON 畸形，重新生成一次（仅一次，不修补截断 JSON）")
+    try:
+        retry_text = await regenerate()
+    except Exception as e:
+        logger.warning(f"工具调用重试失败，沿用首次降级结果: {e}")
+        return parsed
+
+    if not isinstance(retry_text, str) or not retry_text.strip():
+        return parsed
+
+    retried = parse_tool_response(retry_text)
+    if is_malformed_tool_result(retried):
+        logger.warning("工具调用重试后仍畸形，不再重试")
+        return parsed
+    return retried
 
 
 def estimate_tokens(text: str) -> int:

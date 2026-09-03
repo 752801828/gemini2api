@@ -232,6 +232,25 @@ AI からの応答が返ってくれば、デプロイは成功です。
 
 ## トラブルシューティング
 
+### .env を編集して再起動しても反映されない
+
+**症状**: `.env` の設定項目を変更して `docker compose restart` しても値が変わらない。
+
+**原因**: Web パネルの「設定」ページで保存した項目は
+`data/settings-overrides.json` に書き込まれ、起動のたびに再適用されて
+**環境変数より優先** されます。これは意図的な挙動です。パネルで
+`LOG_BODIES_ENABLED` をオフにしたあと、再起動でオンに戻ってはいけないからです。
+
+**確認方法**: 起動ログの次の行が対象項目を示します：
+
+```bash
+docker compose logs | grep "panel setting override"
+# [INFO] app.main: Applied 2 panel setting override(s) from data/settings-overrides.json: log_bodies_enabled=False, max_retries=7
+```
+
+**対処**: パネル側で変更する（推奨）か、`data/settings-overrides.json` を削除して
+`.env` / 環境変数に制御を戻してから再起動してください。
+
 ### Cookie が 2 時間で期限切れになる
 
 **症状**: 数時間後に `SNlM0e not found` エラーが発生

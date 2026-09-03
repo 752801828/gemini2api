@@ -13,16 +13,16 @@ from app.core.account_pool import account_pool as gemini_client
 from app.core.api_forwarder import forward_to_provider, open_stream
 from app.core.fallback import fallback_enabled, is_empty_result, get_fallback_entries, openai_data_is_empty
 from app.core.conversation_store import conversation_store
-from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model
-from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME
+from app.core.gemini_client import GEMINI_MODELS, MODEL_ALIASES, _resolve_model, HTTPStatusError, classify_error
+from app.core.stream import split_into_chunks, format_sse, iter_with_keepalive, SSE_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_FRAME, sse_keepalive_during
 from app.models.openai import (
     ChatRequest, ChatResponse, Choice, ChoiceMessage,
     StreamChunk, StreamChoice, StreamDelta,
     ModelList, ModelInfo, UsageInfo,
     ImageGenerationRequest, ImageData, ImageResponse,
 )
-from app.utils.tools import build_tool_prompt, parse_tool_response, estimate_tokens, is_image_generation_intent, maybe_image_generation_intent
-from app.utils.prompt import build_prompt_from_messages, extract_attachments
+from app.utils.tools import build_tool_prompt, parse_tool_response_with_retry, estimate_tokens, is_image_generation_intent, maybe_image_generation_intent
+from app.utils.prompt import build_prompt_from_messages, extract_attachments, last_user_text
 from app.core.limiter import limiter, dynamic_rate_limit, rate_limit_exempt
 
 logger = logging.getLogger(__name__)
@@ -66,21 +66,7 @@ def _images_md_from_base(images: list, base: str) -> str:
 _SSE_KEEPALIVE_INTERVAL = SSE_KEEPALIVE_INTERVAL  # 单一来源见 app/core/stream.py
 
 
-async def _sse_keepalive_during(task: asyncio.Task, interval: float = _SSE_KEEPALIVE_INTERVAL):
-    """在后台 task 完成前周期 yield SSE comment ping，防止网关首字节/读超时。
-
-    关键：task 在某个 interval 窗口内【抛异常】完成时，wait_for 会原样重抛该异常而非
-    TimeoutError。绝不能让它逃出本生成器——否则会击穿调用方的 try/except（重试 + _err_chunk
-    映射全成死代码），并把已发首帧的响应中途 abort。故非超时的完成（成功或异常）一律 return，
-    让控制权落回调用方的 task.result()，由那里统一做重试/错误映射。"""
-    while not task.done():
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=interval)
-        except asyncio.TimeoutError:
-            yield ": ping\n\n"
-        except Exception:
-            # task 已以异常完成：停止 ping，让调用方 task.result() 重抛并走既有错误处理
-            return
+_sse_keepalive_during = sse_keepalive_during  # 实现下沉至 app/core/stream.py（供 claude 侧复用）
 
 
 async def _sse_stream_chunks(text: str, completion_id: str, model_name: str, *, fast: bool = False):
@@ -302,7 +288,13 @@ async def chat_completions(req: ChatRequest, request: Request):
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, list):
-                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+                    # 注意：这里对"没有可用 text 的 dict 块"（如纯图片块）刻意保留一个空串贡献，
+                    # 与 app/utils/prompt.py 里直接跳过该类块的做法不同 —— 不是笔误。原因是下一行的
+                    # 分支选择逻辑依赖此结果的真假值：纯图片消息展平后是 "\n"（非空即真），仍走
+                    # continuation 分支只发最新一条；若改成跳过就会变成 ""（假），错误落回
+                    # build_prompt_from_messages 把整段历史重发一遍。保留空串 = 保持既有行为逐字节不变。
+                    content = "\n".join(b.get("text", "") if isinstance(b.get("text", ""), str) else ""
+                                        for b in content if isinstance(b, dict))
                 last_user_msg = content
                 break
         prompt = last_user_msg if last_user_msg else build_prompt_from_messages(messages_raw)
@@ -312,7 +304,9 @@ async def chat_completions(req: ChatRequest, request: Request):
     has_tools = bool(req.tools)
     # 生图意图优先：即使带 tools（agent 每请求都带），只要是明确生图意图就跳过工具模拟，
     # 直接走生图，否则工具 prompt 会压制 Gemini 的图片生成能力。
-    if has_tools and is_image_generation_intent(prompt):
+    # 只看最后一轮用户消息：prompt 可能是整段历史（含 system 与 tool_result 正文），
+    # 拿它判断会误判成生图并静默丢掉客户端 tools。
+    if has_tools and is_image_generation_intent(last_user_text(messages_raw)):
         has_tools = False
         logger.info("检测到生图意图，跳过工具调用模拟，直接生图")
     if has_tools:
@@ -337,7 +331,7 @@ async def chat_completions(req: ChatRequest, request: Request):
         result = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
                                               gem_id=gem_id, account_id=gem_account_id,
                                               extended_thinking=extended_thinking)
-    except (RuntimeError, ValueError) as e:
+    except (RuntimeError, ValueError, HTTPStatusError) as e:
         err = e
         result = None
         # 扩展思维链路径失败：先原样退回非思维链重试一次，再走既有兜底（会话过期/第三方）
@@ -347,7 +341,7 @@ async def chat_completions(req: ChatRequest, request: Request):
                 result = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
                                                       gem_id=gem_id, account_id=gem_account_id,
                                                       extended_thinking=False)
-            except (RuntimeError, ValueError) as e2:
+            except (RuntimeError, ValueError, HTTPStatusError) as e2:
                 err = e2
 
         if result is None:
@@ -366,17 +360,23 @@ async def chat_completions(req: ChatRequest, request: Request):
                     fb = await _fallback_result(request, req, messages_raw, resolved_model)
                     if fb is not None:
                         return JSONResponse(content=fb)
+                    status, err_type, retry_after = classify_error(err)
+                    headers = {"Retry-After": str(retry_after)} if retry_after else None
                     return JSONResponse(
-                        status_code=500,
-                        content={"error": {"message": str(err), "type": "api_error"}},
+                        status_code=status,
+                        content={"error": {"message": str(err), "type": err_type}},
+                        headers=headers,
                     )
             else:
                 fb = await _fallback_result(request, req, messages_raw, resolved_model)
                 if fb is not None:
                     return JSONResponse(content=fb)
+                status, err_type, retry_after = classify_error(err)
+                headers = {"Retry-After": str(retry_after)} if retry_after else None
                 return JSONResponse(
-                    status_code=500 if "retry" in str(err).lower() else 400,
-                    content={"error": {"message": str(err), "type": "api_error"}},
+                    status_code=status,
+                    content={"error": {"message": str(err), "type": err_type}},
+                    headers=headers,
                 )
 
     # Gemini 返回空响应（无文本、无图）→ 第三方兜底（开关关闭/无候选时返回 None，零回归）
@@ -408,7 +408,13 @@ async def chat_completions(req: ChatRequest, request: Request):
         await conversation_store.update(conv)
 
     if has_tools:
-        parsed = parse_tool_response(text)
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, resolved_model, gemini_conv_id, attachments,
+                                             gem_id=gem_id, account_id=gem_account_id,
+                                             extended_thinking=extended_thinking)
+            return r.get("text", "")
+
+        parsed = await parse_tool_response_with_retry(text, _regenerate_for_tools)
         if parsed["type"] == "tool_calls":
             tool_calls = []
             for i, tc in enumerate(parsed["tool_calls"]):
@@ -560,7 +566,7 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                         yield chunk
                     if emitted:
                         return
-                yield _err_chunk(completion_id, model_name, str(e2))
+                yield _err_chunk(e2)
                 return
         else:
             if not streamed_any:
@@ -570,7 +576,7 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
                     yield chunk
                 if emitted:
                     return
-            yield _err_chunk(completion_id, model_name, str(e))
+            yield _err_chunk(e)
             return
 
     # Gemini 真流式整条为空（只发过 role 首帧，未流出任何内容）→ 第三方兜底
@@ -609,12 +615,18 @@ async def _stream_response(prompt: str, model: str, has_tools: bool, gemini_conv
     yield "data: [DONE]\n\n"
 
 
-def _err_chunk(completion_id: str, model_name: str, msg: str) -> str:
-    chunk = StreamChunk(
-        id=completion_id, model=model_name,
-        choices=[StreamChoice(delta=StreamDelta(content=f"Error: {msg}"), finish_reason="stop")],
-    )
-    return format_sse(chunk.model_dump()) + "data: [DONE]\n\n"
+def _err_chunk(exc: Exception) -> str:
+    """真实上游失败不能伪装成正常回答（与 v1.6.35 在 Claude 侧修的 defect ② 同类，
+    这里补 OpenAI 协议的残留）：此前发 content:"Error: ..." + finish_reason="stop"，
+    官方 SDK 看不到异常，会把错误文本当成模型说的话，client 的重试/故障转移/退避永远
+    不会触发。改发 OpenAI 风格的 error 帧（data 帧带顶层 "error" 键）——openai SDK 的
+    _streaming.py 专门检测这个键并抛 APIError，这才是流式中途报错的正确表达方式。
+    复用与 Claude 侧同一份 classify_error，两个协议对同一类失败给出一致的 type。
+    调用方在此之前已经先尝试过 _maybe_fallback_stream（第三方兜底），本函数只在
+    兜底也未命中时才会被触达；已流出的内容不受影响（不回退已发内容）。"""
+    status, err_type, _retry_after = classify_error(exc)
+    chunk = {"error": {"message": str(exc), "type": err_type, "code": status}}
+    return format_sse(chunk) + "data: [DONE]\n\n"
 
 
 async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, gemini_conv_id: str = "", conv=None, messages_raw=None, model_name: str = "", completion_id: str = "", attachments=None, base_url: str = "", request=None, req=None, gem_id=None, account_id=None) -> AsyncGenerator[str, None]:
@@ -631,8 +643,14 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                                             gem_id=gem_id, account_id=account_id)
 
     gen_task = asyncio.create_task(_run_generate())
-    async for ping in _sse_keepalive_during(gen_task):
-        yield ping
+    try:
+        async for ping in _sse_keepalive_during(gen_task):
+            yield ping
+    except BaseException:          # GeneratorExit / CancelledError on client disconnect
+        gen_task.cancel()
+        if gen_task.done() and not gen_task.cancelled():
+            gen_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+        raise
 
     try:
         result = gen_task.result()
@@ -643,8 +661,14 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                 gemini_client.generate(full_prompt, model, "", attachments,
                                        gem_id=gem_id, account_id=account_id)
             )
-            async for ping in _sse_keepalive_during(retry_task):
-                yield ping
+            try:
+                async for ping in _sse_keepalive_during(retry_task):
+                    yield ping
+            except BaseException:          # GeneratorExit / CancelledError on client disconnect
+                retry_task.cancel()
+                if retry_task.done() and not retry_task.cancelled():
+                    retry_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+                raise
             try:
                 result = retry_task.result()
             except Exception as e2:
@@ -654,7 +678,7 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                     yield chunk
                 if emitted:
                     return
-                yield _err_chunk(completion_id, model_name, str(e2))
+                yield _err_chunk(e2)
                 return
         else:
             emitted = False
@@ -663,7 +687,7 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
                 yield chunk
             if emitted:
                 return
-            yield _err_chunk(completion_id, model_name, str(e))
+            yield _err_chunk(e)
             return
 
     # Gemini 返回空响应（无文本、无图）→ 第三方兜底（此前只发过 role 首帧 + keepalive，可安全改流）
@@ -688,7 +712,25 @@ async def _stream_response_buffered(prompt: str, model: str, has_tools: bool, ge
         await conversation_store.update(conv)
 
     if has_tools:
-        parsed = parse_tool_response(text)
+        # 此刻只发过 role 首帧 + keepalive，还没发任何 content 块，重试是安全的。
+        async def _regenerate_for_tools() -> str:
+            r = await gemini_client.generate(prompt, model, gemini_conv_id, attachments,
+                                             gem_id=gem_id, account_id=account_id)
+            return r.get("text", "")
+
+        # 畸形工具 JSON 的重试要再跑一整轮上游 generate()——这条流早就开了（role 首帧已发），
+        # 裸 await 会在这段已开的连接上制造一次远超单个 keepalive 间隔的死寂（issue #10
+        # followup F2）。用与上面 gen_task 相同的 task + keepalive 套路续上心跳。
+        parse_task = asyncio.create_task(parse_tool_response_with_retry(text, _regenerate_for_tools))
+        try:
+            async for ping in _sse_keepalive_during(parse_task):
+                yield ping
+        except BaseException:          # GeneratorExit / CancelledError on client disconnect
+            parse_task.cancel()
+            if parse_task.done() and not parse_task.cancelled():
+                parse_task.exception()   # 取回异常，避免 asyncio 在 GC 时打印 "Task exception was never retrieved"
+            raise
+        parsed = parse_task.result()
         if parsed["type"] == "tool_calls":
             for tc in parsed["tool_calls"]:
                 call_id = f"call_{uuid.uuid4().hex[:8]}"

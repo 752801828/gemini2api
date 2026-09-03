@@ -60,16 +60,16 @@
 
 | Date | Update |
 |------|--------|
+| 2026-09-01 16:20:00 | v1.6.39 - ⚙️ `LOG_BODIES_ENABLED` is now a toggle in the admin panel's new "Logging" group — takes effect instantly, no config edit or restart (still off by default); ⚠️ Behavior change: settings saved from the panel now persist to `data/settings-overrides.json` and **take priority over environment variables** (previously a panel change was silently reverted on restart); fixed float fields being silently truncated by `parseInt`, rejected NaN/±Infinity, and made a failed write roll back all three layers (memory / overrides file / .env) atomically; filled in panel labels that rendered as raw field names or hardcoded Chinese, with guard tests |
+| 2026-09-01 13:10:00 | v1.6.38 - 🍪 Fix same-name cookies coexisting across domains (when Google redirects you to a country domain such as .com.hk) aborting session-token acquisition and wrongly marking the account unhealthy (issue #10 follow-up; also a real trigger of the issue #11 wedge); a malformed tool-call JSON now triggers one automatic regeneration (with stream keepalive during the retry); new opt-in full request/response logging `LOG_BODIES_ENABLED` (off by default, memory-only — never written to disk — and no request headers recorded) |
+| 2026-08-30 18:20:00 | v1.6.37 - 🩺 Fix the account pool wedging permanently and mis-reporting "All accounts busy" (issue #11): an account whose session expired made every request wait the full 60s and return a bogus 529; it now fails fast with an accurate 503 and **automatically attempts a cookie reload to self-heal**; a client disconnect is no longer counted as an account failure (three Stop clicks could kill a single-account pool); a failed cookie reload no longer permanently downs a healthy account |
+| 2026-08-28 19:40:00 | v1.6.36 - 🚨 OpenAI streaming no longer disguises upstream errors as a successful answer (a standard `error` frame is emitted so SDK clients raise and can retry); finer error types for upstream 4xx; the Anthropic `citations` field is now consistent between streaming and non-streaming; a non-string `content` no longer causes a 500 |
+| 2026-08-28 17:30:00 | v1.6.35 - 🛠️ Protocol-conformance and robustness overhaul: fixed image-intent false positives that **silently dropped client tools** (shared by all four protocols), upstream errors masquerading as normal answers, `HTTPStatusError` escaping as bare 500s (pool-exhausted now 529 + Retry-After), missing keepalive on the `/v1/responses` and native-Gemini buffered branches, the native Gemini router rejecting the official SDK's camelCase payloads, OpenAI `tool_calls` being dropped, the third-party Anthropic forwarder breaking tool loops after round 1, and Anthropic response-shape conformance (no more non-standard image block or null noise) |
+| 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic protocol polish: responses now include the spec's `stop_sequence` field (documented across all five API docs); a null tool-call `name` no longer renders as the Python literal None; the disconnect keepalive guard now retrieves task exceptions; plus hardened tests for the tool rendering format and disconnect cancellation |
+| 2026-08-28 14:20:00 | v1.6.33 - 🔌 Fix Claude Code connectivity (issue #10): `system` now accepts the text-block array form (no more 422); `tool_use`/`tool_result` blocks are no longer dropped (agent tool loop works); Anthropic streaming now emits the standard `event:` + `data:` frames; plus keepalive on the Claude buffered stream and prompt account-slot release on client disconnect |
 | 2026-08-14 22:50:00 | v1.6.32 - 🧠 Stream reasoning frame-by-frame: native Gemini's thinking now streams incrementally as reasoning_content during generation (/v1/chat/completions), so it appears before the answer with a typewriter effect, fixing the panel's 'answer before thinking'; the final frame still carries full thoughts as a safety net; zero regression for non-thinking/normal chat |
 | 2026-08-14 22:40:00 | v1.6.31 - 🌊 Fix intermittent streaming disconnects: send keepalive heartbeats during the silent gap while the model generates, across all four streaming APIs (/v1/chat/completions, /v1/responses, /v1/messages, native Gemini streamGenerateContent), so long responses aren't cut by cross-border/gateway idle timeouts; also reworded the misleading panel network-error copy |
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 Playground 'Thinking' toggle: enable Gemini extended thinking from the model-testing panel; the reasoning shows as a collapsible block above the answer |
-| 2026-08-14 21:00:00 | v1.6.29 - 🧠 Native Gemini extended thinking: send `reasoning_effort` to enable thinking on pro/flash/flash-lite, returned as reasoning_content; default-on, one-click disable, auto-fallback so normal chat is unaffected; also fixed the flash-lite free-tier model id |
-| 2026-07-30 21:55:00 | v1.6.28 - 🆕 New gemini-flash-lite model: exposes Gemini's lightest Flash-Lite tier (3.5 Flash-Lite), so there's still a usable model when Pro/Flash are rate-limited (mapped per-account to the real model behind the fixed public name) |
-| 2026-07-25 09:50:00 | v1.6.27 - 🎨 Admin panel brand logo & favicon: replaced the top-left icon with a custom brand logo image (compressed to 128×128, ~16KB, ~97% smaller than the original); added a browser-tab favicon to the admin panel and login page (same logo) |
-| 2026-07-07 12:48:37 | v1.6.26 - 🔌 New OpenAI Responses API support (`/v1/responses` or `/openai/v1/responses`): lets clients that require the newer Responses protocol (e.g. Codex CLI, which dropped Chat Completions support in Feb 2026) work with gemini2api — text chat, streaming, and function/tool calling, for both Gemini models and third-party models configured in API Management; streaming events strictly follow the official protocol order (fixing two terminal events a known reference implementation omits: `response.output_text.done` / `response.function_call_arguments.done`); no server-side multi-turn state — `previous_response_id` returns a clear error instead of silently faking continuity, since clients like Codex CLI resend the full conversation history themselves |
-| 2026-06-23 00:00:00 | v1.6.25 - 🎚️ Gemini fallback toggle in API Management: one-click enable/disable of the Gemini→third-party fallback chain, takes effect instantly and persists (previously required editing .env and restarting); the toggle only controls fallback — third-party models are always reachable directly and always listed in /v1/models |
-| 2026-06-22 20:06:08 | v1.6.24 - 🧩 Custom Gem support: new "Gem Management" page in the admin panel lets you list / create / edit / delete your own custom Gems; expose any Gem as a model name — any OpenAI-compatible client calling that model name will converse using that Gem's persona; each Gem is bound to its owner account (calls go only to the bound account, not round-robined); deleting a Gem automatically removes its model-name mapping |
-| 2026-06-22 14:21:48 | v1.6.23 - 🧠 Per-model thinking (reasoning_effort) setting for third parties: configure a thinking level per third-party model in API Management (unset / none / low / medium / high / custom); the relay auto-injects it on forward — reasoning_effort for OpenAI-compatible upstreams, mapped to thinking (budget_tokens) for Anthropic with the response thinking mapped back to reasoning_content; zero regression when unset, leave non-thinking models unset; also fixes "a reasoning-only response (content temporarily empty) wrongly treated as empty" |
 
 ---
 
@@ -423,7 +423,7 @@ response = client.chat.completions.create(
 | GET | `/usage-stats/summary` | Usage statistics summary |
 | GET | `/usage-stats/history` | Historical trend data |
 | GET | `/settings` | Get current editable config (grouped) |
-| POST | `/settings` | Batch-update config (writes .env + hot-reloads memory) |
+| POST | `/settings` | Batch-update config (hot-reloads memory + writes `data/settings-overrides.json`; also writes `.env`) |
 | GET | `/api-keys` | API Key list (keys masked) |
 | GET | `/api-keys/catalog` | Provider catalog (built-in model lists) |
 | POST | `/api-keys` | Add API Key |
@@ -452,6 +452,20 @@ response = client.chat.completions.create(
 ---
 
 ## ⚙ Configuration
+
+> [!IMPORTANT]
+> **Settings changed in the panel take precedence over environment variables.**
+> Anything you save on the web panel's Settings page is written to
+> `data/settings-overrides.json` (`data/` is the persistent bind mount used by
+> docker-compose) and replayed on every startup, **overriding** the corresponding
+> environment variable in the table below. This is deliberate: once you turn
+> `LOG_BODIES_ENABLED` off in the panel, `docker compose restart` must not turn it
+> back on.
+>
+> So if you **edited `.env`, restarted, and nothing changed**, that field is most
+> likely overridden by the panel. The startup log names the affected fields:
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...`.
+> Delete `data/settings-overrides.json` to hand control back to the environment.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|

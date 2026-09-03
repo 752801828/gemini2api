@@ -115,8 +115,10 @@ def test_gemini_native_realstream_emits_blankline_keepalive_during_silence(gem_c
 
 
 def test_chat_realstream_exception_before_any_delta_does_not_500(gem_client, monkeypatch):
-    """FIX 3b：真流式在发出任何 delta 前直接抛异常，路由必须走既有 except 分支收尾
-    （_maybe_fallback_stream 探不到第三方结果时落回 _err_chunk），而不是让异常击穿到 500。"""
+    """FIX 3b + R1：真流式在发出任何 delta 前直接抛异常，路由必须走既有 except 分支收尾
+    （_maybe_fallback_stream 探不到第三方结果时落回 _err_chunk），而不是让异常击穿到 500；
+    且错误必须以标准 OpenAI error 帧（data.error）发出，不能伪装成 finish_reason="stop"
+    的正常回答（R1：与 Claude 侧同类修复对齐，这是 defect ② 在 OpenAI 协议上的残留）。"""
     import app.routers.openai as oai
 
     async def boom_generate_stream(prompt, model, conversation_id="", attachments=None,
@@ -131,6 +133,9 @@ def test_chat_realstream_exception_before_any_delta_does_not_500(gem_client, mon
         assert r.status_code == 200   # 请求本身不能 500/未处理异常击穿
         body = "".join(r.iter_text())
     # 测试环境 FALLBACK_ENABLED 默认 False → _maybe_fallback_stream 探不到结果 → 落回 _err_chunk，
-    # 其内容形如 `"content": "Error: boom"`，随后照常发 [DONE] 收尾。
-    assert "Error: boom" in body
+    # 发标准 error 帧，随后照常发 [DONE] 收尾——不再伪装成 content:"Error: ..." 的正常回答。
+    assert '"error"' in body
+    assert '"message": "boom"' in body
+    assert "Error: boom" not in body
+    assert '"finish_reason": "stop"' not in body
     assert "[DONE]" in body

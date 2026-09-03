@@ -35,6 +35,57 @@ class HTTPStatusError(Exception):
         super().__init__(f"HTTP {status_code}: {text[:200]}")
 
 
+# account_pool.acquire() 抛出的三种"池打满/耗尽"RuntimeError 消息（均为动态拼接，故用子串匹配）。
+# 之前的 "retry" in str(e).lower() 判断是死代码：这三条消息都不含 "retry"，导致池打满被误判成
+# 400（客户端当成不可重试的请求错误），而不是应该重试的 5xx/529。
+_POOL_EXHAUSTED_HINTS = (
+    "No more accounts to failover to",
+    "No available accounts",
+    "All accounts busy",
+)
+
+# 池打满时建议客户端等待的秒数（排队时长无法精确预测，给一个保守的固定值）。
+POOL_EXHAUSTED_RETRY_AFTER = 30
+
+# acquire() 在「账号 status 还是 ACTIVE、但其 client 会话已失效」时抛出的消息（issue #11）。
+# 这**不是**池打满：并发槽位是空的，排队再久也不会好转，只有刷新/更换 Cookie 才能恢复。
+# 故映射成 503 api_error 而不是 529 overloaded_error —— 529 的语义是"过载了，等会儿再来"，
+# 会让所有客户端不停重试一个永远不会自行恢复的池，还把真实原因（会话过期）藏了起来。
+NO_HEALTHY_ACCOUNT_MSG = "No healthy account (session expired, cookie refresh required)"
+
+
+def classify_error(exc: Exception) -> tuple[int, str, int | None]:
+    """把 generate()/generate_stream() 抛出的异常统一映射成
+    (http_status, error_type, retry_after_seconds)。
+
+    error_type 用 Anthropic 风格命名（overloaded_error/rate_limit_error/api_error/
+    invalid_request_error）；OpenAI/Gemini 路由各自用自己的错误信封包裹同一个 type 字符串。
+    三个协议路由的非流式错误响应，以及 Claude 真流式的 error 帧，全部复用这一个函数，
+    避免同一类失败在不同入口给出不一致（甚至互相矛盾）的状态码/类型。
+    """
+    if isinstance(exc, HTTPStatusError):
+        status = exc.status_code
+        if status == 429:
+            error_type = "rate_limit_error"
+        elif 400 <= status < 500:
+            # 4xx 都是请求侧的问题（含 400），不该跟 5xx 混用同一个 api_error。
+            error_type = "invalid_request_error"
+        else:
+            error_type = "api_error"
+        return status, error_type, None
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        # 先判"会话失效"再判"池打满"：前者槽位是空的，重试不会好转，529 是误导（issue #11）。
+        if NO_HEALTHY_ACCOUNT_MSG in msg:
+            return 503, "api_error", None
+        if any(hint in msg for hint in _POOL_EXHAUSTED_HINTS):
+            return 529, "overloaded_error", POOL_EXHAUSTED_RETRY_AFTER
+        return 500, "api_error", None
+    if isinstance(exc, ValueError):
+        return 400, "invalid_request_error", None
+    return 500, "api_error", None
+
+
 GEMINI_APP_URL = "https://gemini.google.com/app"
 GEMINI_APP_EN_URL = "https://gemini.google.com/app?hl=en"
 ROTATE_COOKIES_URL = "https://accounts.google.com/RotateCookies"
@@ -1650,7 +1701,33 @@ class GeminiWebClient:
         if self._http:
             await self._http.close()
 
+    def _restore_session_state(self, prev: tuple) -> None:
+        """把会话状态回滚到 reload_cookies 调用前（仅当调用前是健康的）。
+
+        只还原 _healthy 是不够的：函数开头会清空 _session_token 并把新 Cookie 写进 jar，
+        一个"健康但没有 SNlM0e token / 拿着别人 Cookie"的 client 会被池照常派活、然后每个
+        请求都失败，3 次就被标 EXPIRED —— 比不还原更糟。所以整组状态一起回滚。
+        """
+        psid, psidts, session_token, was_healthy = prev
+        if not was_healthy:
+            return
+        self._psid = psid
+        self._psidts = psidts
+        self._session_token = session_token
+        self._healthy = True
+        if self._cookie_jar is not None:
+            self._cookie_jar.set("__Secure-1PSID", psid)
+            if psidts:
+                self._cookie_jar.set("__Secure-1PSIDTS", psidts)
+        logger.warning("Cookie reload failed; restored the previous working session")
+
     async def reload_cookies(self, psid: str | None = None, psidts: str | None = None) -> dict:
+        # F4（issue #11）：先快照重载前的会话状态。reload 的语义应是"要么换上新会话、
+        # 要么原样不动"：旧实现在任何网络操作之前就无条件 self._healthy = False，失败返回
+        # 路径却从不恢复，于是一次失败的刷新（面板误填 cookie、Google 临时 5xx、多账号池里
+        # /reload-cookies 拿同一份 cookie 挨个试）就把一个本来健康的 client 永久拉黑。
+        prev_state = (self._psid, self._psidts, self._session_token, self._healthy)
+
         if psid:
             self._psid = psid.strip().strip('"').strip("'").rstrip(";")
         if psidts:
@@ -1660,37 +1737,46 @@ class GeminiWebClient:
         self._healthy = False
         self._last_reload_error = ""
 
-        # Recreate HTTP session to avoid accumulated cookie conflicts
-        if self._http:
-            await self._http.close()
-        self._http = self._new_http_session()
+        try:
+            # Recreate HTTP session to avoid accumulated cookie conflicts
+            if self._http:
+                await self._http.close()
+            # Keep the account's configured proxy/fingerprint session; replacing this
+            # with a proxy-less AsyncSession would break Flow fixed-route accounts.
+            self._http = self._new_http_session()
 
-        self._cookie_jar.set("__Secure-1PSID", self._psid)
-        if self._psidts:
-            self._cookie_jar.set("__Secure-1PSIDTS", self._psidts)
+            self._cookie_jar.set("__Secure-1PSID", self._psid)
+            if self._psidts:
+                self._cookie_jar.set("__Secure-1PSIDTS", self._psidts)
 
-        await self._obtain_session_token()
-        if self._session_token:
-            self._healthy = True
-            self._ensure_refresh_task()
-            await self._send_heartbeat()  # 拉取账号真实可用模型
-            logger.info("Cookies reloaded successfully")
-            return {"success": True}
-
-        first_error = self._last_reload_error or "SNlM0e token not found"
-
-        rotated = await self._rotate_cookies()
-        if rotated:
             await self._obtain_session_token()
             if self._session_token:
                 self._healthy = True
                 self._ensure_refresh_task()
-                logger.info("Cookies reloaded after rotation")
+                await self._send_heartbeat()  # 拉取账号真实可用模型
+                logger.info("Cookies reloaded successfully")
                 return {"success": True}
 
-        error_msg = self._last_reload_error or first_error
-        logger.error(f"Cookie reload failed: {error_msg}")
-        return {"success": False, "error": error_msg}
+            first_error = self._last_reload_error or "SNlM0e token not found"
+
+            rotated = await self._rotate_cookies()
+            if rotated:
+                await self._obtain_session_token()
+                if self._session_token:
+                    self._healthy = True
+                    self._ensure_refresh_task()
+                    logger.info("Cookies reloaded after rotation")
+                    return {"success": True}
+
+            error_msg = self._last_reload_error or first_error
+            logger.error(f"Cookie reload failed: {error_msg}")
+            self._restore_session_state(prev_state)
+            return {"success": False, "error": error_msg}
+        except Exception:
+            # 已经换上新会话之后才炸的（如 _send_heartbeat 抛错）不回滚，新会话是好的
+            if not self._healthy:
+                self._restore_session_state(prev_state)
+            raise
 
     def _ensure_refresh_task(self):
         if self._refresh_task is None or self._refresh_task.done():

@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Chrome%20%7C%20Edge-Latest-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Browser">
   <img src="https://img.shields.io/badge/License-Non--Commercial-red?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v1.6.32-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.39-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -63,16 +63,16 @@
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-09-01 16:20:00 | v1.6.39 - ⚙️ `LOG_BODIES_ENABLED` 接入管理面板「日志」分组，点一下即时生效、无需改配置重启（默认仍关）；⚠️ 行为变更：面板保存过的设置项现在落盘 `data/settings-overrides.json` 并**优先于环境变量**（此前面板改完一重启就被打回）；修复面板小数字段被 `parseInt` 静默截断、拒绝 NaN/±Infinity 写入、写盘失败时三层（内存/覆盖文件/.env）全有或全无回滚；补齐面板里显示成原始字段名/写死中文的标签并加守卫测试 |
+| 2026-09-01 13:10:00 | v1.6.38 - 🍪 修复「同名 Cookie 跨域并存」（Google 重定向到 .com.hk 等国家域名时）导致会话获取整体失败、账号被误标不健康（issue #10 追加；也是 issue #11 卡死的真实触发源之一）；工具调用 JSON 畸形时自动重新生成一次（重试期间有流式保活）；新增可开关的完整请求/响应记录 `LOG_BODIES_ENABLED`（默认关，只存内存不写盘、不记请求头） |
+| 2026-08-30 18:20:00 | v1.6.37 - 🩺 修复账号池永久卡死并误报「All accounts busy」（issue #11）：会话失效的账号此前会让每个请求空等 60 秒并返回错误的 529，现改为立即返回准确的 503 并**自动尝试重载 cookie 自愈**；客户端断连不再被计为账号失败（点 3 次「停止」曾能让单账号池瘫痪）；cookie 重载失败不再永久拉黑健康账号 |
+| 2026-08-28 19:40:00 | v1.6.36 - 🚨 OpenAI 流式上游错误不再伪装成正常回答（改发标准 error 帧，客户端可正确抛错重试）；上游 4xx 错误类型细化；Anthropic `citations` 字段在流式/非流式间对齐；非字符串 content 不再触发 500 |
+| 2026-08-28 17:30:00 | v1.6.35 - 🛠️ 协议一致性与健壮性大修：修复生图意图误判导致**客户端工具被静默丢弃**（四协议共用）、上游错误伪装成正常回答、`HTTPStatusError` 逃逸成裸 500（池满改 529+Retry-After）、`/v1/responses` 与 native Gemini buffered 分支缺失的流式保活、原生 Gemini 不认官方 SDK camelCase 报文、OpenAI `tool_calls` 被丢弃、第三方 Anthropic 转发工具循环第二轮硬失败，以及 Anthropic 响应结构对齐（去掉非标准 image 块与 null 噪音） |
+| 2026-08-28 15:10:00 | v1.6.34 - 🧹 Anthropic 协议细节打磨：响应补上规范的 `stop_sequence` 字段并同步五语言 API 文档；工具调用块 name 为 null 时不再渲染成 None；断连保活守卫补异常取回；并加固工具渲染格式与断连取消的测试覆盖 |
+| 2026-08-28 14:20:00 | v1.6.33 - 🔌 修复 Claude Code 无法接入（issue #10）：`system` 支持文本块数组不再 422；`tool_use`/`tool_result` 块不再被丢弃（工具循环可用）；Anthropic 流式改为标准 event+data 两行制；并给 Claude buffered 流式补保活、断连及时归还账号槽位 |
 | 2026-08-14 22:50:00 | v1.6.32 - 🧠 思考内容逐帧流式：原生 Gemini 的思考过程在生成阶段就作为 reasoning_content 逐帧增量流出（/v1/chat/completions），思考先于答案显示、带打字机效果，修复面板「答案早于思考」；收尾仍带完整思考兜底，不开思考/普通对话零回归 |
 | 2026-08-14 22:40:00 | v1.6.31 - 🌊 修复流式连接偶发中断：为全部四条流式接口（/v1/chat/completions、/v1/responses、/v1/messages、native Gemini streamGenerateContent）在等待模型生成的静默期补发保活心跳，避免长响应被跨境/网关空闲超时掐断；并修正面板误导的网络错误提示 |
 | 2026-08-14 22:30:00 | v1.6.30 - 🧠 模型测试面板新增「思考」开关：勾选后对 Gemini 开启扩展思考，思考过程以可折叠块显示在答案上方 |
-| 2026-08-14 21:00:00 | v1.6.29 - 🧠 原生 Gemini 扩展思考：`reasoning_effort` 开启，思考过程作为 reasoning_content 返回；默认开可一键关、失败自动退回，不影响普通聊天；并修正 flash-lite 免费档 ID |
-| 2026-07-30 21:55:00 | v1.6.28 - 🆕 新增 gemini-flash-lite 模型：暴露 Gemini 最轻量的 Flash-Lite 档（3.5 Flash-Lite），在 Pro/Flash 被限额时仍有可用模型可选（内部按账号真实模型动态映射，沿用固定公开名） |
-| 2026-07-25 09:50:00 | v1.6.27 - 🎨 管理面板品牌 Logo 与 Favicon：左上角图标更换为自定义品牌 Logo 图片（并压缩至 128×128、约 16KB，较原图缩小约 97%）；管理面板与登录页新增浏览器标签页图标（Favicon，使用同一 Logo） |
-| 2026-07-07 12:48:37 | v1.6.26 - 🔌 新增 OpenAI Responses API 支持（`/v1/responses` 或 `/openai/v1/responses`）：让需要新版 Responses 协议的客户端（如 2026 年 2 月起砍掉 Chat Completions 支持的 Codex CLI）能正常接入 gemini2api——支持文本对话、流式输出、工具调用，Gemini 模型和 API 管理配置的第三方模型均可使用；流式事件严格遵循官方协议顺序（修正了参考实现已知会漏发的两个关键事件：`response.output_text.done` / `response.function_call_arguments.done`）；不支持服务端多轮状态（`previous_response_id` 会明确报错而非假装续上），因为 Codex CLI 本身会重发完整对话历史 |
-| 2026-06-23 00:00:00 | v1.6.25 - 🎚️ API 管理页 Gemini 兜底一键开关：即时开/关「Gemini→第三方兜底」并持久化（原来只能改 .env 且需重启）；开关只控制兜底，第三方模型照常直连调用、照常在 /v1/models |
-| 2026-06-22 20:06:08 | v1.6.24 - 🧩 自定义 Gem 支持：管理面板新增「Gem 管理」页，可列出/新建/修改/删除账号下你自己创建的自定义 Gem，并把任意 Gem「暴露为模型名」——任何 OpenAI 兼容客户端用该模型名调用即以该 Gem 人设对话；Gem 绑定所属账号、调用只走绑定账号不轮询；删 Gem 时自动清理对应模型映射 |
-| 2026-06-22 14:21:48 | v1.6.23 - 🧠 第三方「每模型思考(reasoning_effort)」设置：API 管理里可为每条第三方模型配置思考等级（默认不设/none/low/medium/high/自定义），转发时自动注入——OpenAI 兼容上游注入 reasoning_effort，Anthropic 上游换算成 thinking(budget_tokens) 并把响应思考映射回 reasoning_content；默认不设时零回归，不支持思考的模型留默认即可；同时修复"仅返回思考内容(正文暂空)被误判为空响应"的问题 |
 
 ---
 
@@ -506,7 +506,7 @@ curl -X POST http://localhost:5918/v1/images/generations \
 | GET | `/usage-stats/summary` | 用量统计概览（累计请求数、错误率、延迟、轮换成功率） |
 | GET | `/usage-stats/history` | 历史趋势数据（支持 granularity 和 hours 参数） |
 | GET | `/settings` | 获取当前可编辑配置（分组返回） |
-| POST | `/settings` | 批量更新配置（写入 .env + 热更新内存） |
+| POST | `/settings` | 批量更新配置（热更新内存 + 写入 `data/settings-overrides.json`，同时照写 `.env`） |
 | GET | `/api-keys` | API Key 列表（密钥脱敏） |
 | GET | `/api-keys/catalog` | Provider 目录（内置模型列表） |
 | POST | `/api-keys` | 添加 API Key |
@@ -575,6 +575,17 @@ curl -X POST http://localhost:5918/admin/reload-cookies \
 ---
 
 ## ⚙ 配置说明
+
+> [!IMPORTANT]
+> **面板改过的设置项优先级高于环境变量。** 在 Web 面板「设置」页保存过的项会写进
+> `data/settings-overrides.json`（`data/` 是 docker-compose 的持久化 bind mount），
+> 并在每次启动时回放、**覆盖**下表中对应的环境变量。
+> 这是刻意的：面板上关掉 `LOG_BODIES_ENABLED` 之后，`docker compose restart` 不能把它
+> 重新打开。
+>
+> 所以：**改了 `.env` 重启却不生效**，多半就是该字段被面板覆盖了。启动日志里有一行
+> `Applied N panel setting override(s) from data/settings-overrides.json: ...` 会点名
+> 具体字段；删掉 `data/settings-overrides.json` 即可把控制权交回环境变量。
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
